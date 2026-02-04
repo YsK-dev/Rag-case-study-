@@ -32,14 +32,21 @@ class OllamaClient:
         # Build the prompt with context
         context = "\n\n".join(context_chunks)
         
-        prompt = f"""You are a helpful assistant. Answer the question based on the context provided below.
+        prompt = f"""You are a helpful technical assistant. Answer the question based on the context provided below.
+
+IMPORTANT INSTRUCTIONS:
+- If the context contains mathematical equations or formulas, preserve them exactly as shown
+- If the context contains code blocks, preserve the code formatting
+- If the context contains tables, describe them clearly
+- Be precise and technical when appropriate
+- Cite specific details from the context
 
 Context:
 {context}
 
 Question: {query}
 
-Answer: """
+Answer (be detailed and preserve any equations, code, or technical formatting):"""
         
         try:
             # Call Ollama API

@@ -1,11 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RAG Q&A System</title>
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="/static/transparency.css">
+    <link rel="stylesheet" href="/static/page_links.css">
+
+    <!-- MathJax for LaTeX rendering -->
+    <script>
+        MathJax = {
+            tex: {
+                inlineMath: [['$', '$']],
+                displayMath: [['$$', '$$']],
+                processEscapes: true
+            },
+            chtml: {
+                fontURL: 'https://cdn.jsdelivr.net/npm/mathjax@3/es5/output/chtml/fonts/woff-v2'
+            }
+        };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js" async></script>
 </head>
+
 <body>
     <div class="container">
         <!-- Header -->
@@ -47,20 +66,18 @@
                             <div class="example-questions">
                                 <p><strong>Example questions:</strong></p>
                                 <button class="example-btn" onclick="askExample('What is RAG?')">What is RAG?</button>
-                                <button class="example-btn" onclick="askExample('What are the key components?')">What are the key components?</button>
-                                <button class="example-btn" onclick="askExample('What are the benefits?')">What are the benefits?</button>
+                                <button class="example-btn" onclick="askExample('What are the key components?')">What
+                                    are the key components?</button>
+                                <button class="example-btn" onclick="askExample('What are the benefits?')">What are the
+                                    benefits?</button>
                             </div>
                         </div>
                     </div>
 
                     <div class="chat-input-container">
                         <div class="input-wrapper">
-                            <input 
-                                type="text" 
-                                id="question-input" 
-                                placeholder="Ask a question about your documents..."
-                                onkeypress="handleKeyPress(event)"
-                            >
+                            <input type="text" id="question-input" placeholder="Ask a question about your documents..."
+                                onkeypress="handleKeyPress(event)">
                             <button class="btn btn-send" onclick="sendQuestion()">
                                 <span id="send-icon">Send</span>
                             </button>
@@ -73,4 +90,5 @@
 
     <script src="/static/app.js"></script>
 </body>
+
 </html>

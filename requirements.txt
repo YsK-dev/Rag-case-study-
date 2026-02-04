@@ -5,4 +5,6 @@ chromadb
 sentence-transformers
 pypdf
 python-multipart
-ollama  
+ollama
+pdfplumber
+pymupdf  
