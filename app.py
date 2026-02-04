@@ -182,6 +182,19 @@ async def serve_pdf(filename: str):
     
     return FileResponse(file_path, media_type="application/pdf")
 
+#for review Pdfs 
+@app.get("/api/documents/{filename}")
+async def get_document(filename: str):
+    file_path = Path(f"./uploads/{filename}")
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="PDF not found")
+    
+    return FileResponse(
+        file_path,
+        media_type="application/pdf",
+        filename=filename
+    )
+
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):
     """
