@@ -1,0 +1,30 @@
+/* Page link styling */
+.page-link {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 600;
+    padding: 0.25rem 0.5rem;
+    background: rgba(99, 102, 241, 0.1);
+    border-radius: 4px;
+    transition: all 0.2s ease;
+    display: inline-block;
+}
+
+.page-link:hover {
+    background: rgba(99, 102, 241, 0.2);
+    transform: translateY(-1px);
+}
+
+.page-info {
+    color: var(--text-secondary);
+    font-weight: 600;
+}
+
+.source-meta {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}

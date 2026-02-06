@@ -1,14 +1,17 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
+from pathlib import Path
 import sys
 import os
 import shutil
 import logging
 import time
+import json
 from datetime import datetime
+from typing import Optional, List
 
 # Add src to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -31,7 +34,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="RAG Q&A API",
     description="Retrieval-Augmented Generation API for document-based question answering",
-    version="1.0.0"
+    version="2.0.0"
 )
 
 # Add CORS middleware
@@ -42,6 +45,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Model mapping - frontend model names to Ollama models
+MODEL_MAPPING = {
+    "gemini-1.5-flash": "qwen3:1.7b",     # Fast model (smaller, quicker)
+    "gemini-1.5-pro": "pielee/qwen3-4b-thinking-2507_q8:latest",  # Smart model (larger, better reasoning)
+    "flash": "qwen3:1.7b",
+    "pro": "pielee/qwen3-4b-thinking-2507_q8:latest"
+}
 
 # Initialize RAG components
 print("Initializing RAG Engine...")
@@ -54,22 +65,50 @@ print("Server ready!")
 class ChatRequest(BaseModel):
     question: str
     top_k: int = 3
+    model: Optional[str] = "gemini-1.5-flash"
+    stream: Optional[bool] = False
+    temperature: Optional[float] = 0.7  # Temperature for LLM generation (0.0-1.0)
+
+class FeedbackRequest(BaseModel):
+    message_id: str
+    feedback: str  # "up" or "down"
+
+class ReasoningTrace(BaseModel):
+    query_rewrite: str = ""
+    search_terms: List[str] = []
+    retrieval_strategy: str = ""
 
 class SourceChunk(BaseModel):
     text: str
     source: str
-    chunk_id: str
+    chunk_id: str = ""
     page: int = 0
     content_type: str = "text"
     file_path: str = ""
     char_count: int = 0
     token_count: int = 0
     char_count_raw: int = 0
+    confidence: float = 0.5
 
 class ChatResponse(BaseModel):
     answer: str
-    sources: list[SourceChunk] = []
+    sources: List[SourceChunk] = []
     metadata: dict = {}
+    reasoning: Optional[ReasoningTrace] = None
+
+# Feedback storage path
+FEEDBACK_FILE = "data/feedback.json"
+
+def load_feedback():
+    if os.path.exists(FEEDBACK_FILE):
+        with open(FEEDBACK_FILE, 'r') as f:
+            return json.load(f)
+    return {"entries": []}
+
+def save_feedback(data):
+    os.makedirs(os.path.dirname(FEEDBACK_FILE), exist_ok=True)
+    with open(FEEDBACK_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
 
 # API Endpoints
 @app.get("/")
@@ -80,17 +119,163 @@ async def root():
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "model": "qwen3:1.7b"}
+    return {"status": "healthy", "model": llm_client.model}
 
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """
-    Answer questions using RAG
-    """
-    start_time = time.time()
-    logger.info(f"Received question: {request.question}")
+@app.post("/api/feedback")
+async def submit_feedback(request: FeedbackRequest):
+    """Store user feedback for a message"""
+    logger.info(f"Received feedback: {request.feedback} for message {request.message_id}")
     
     try:
+        feedback_data = load_feedback()
+        feedback_data["entries"].append({
+            "message_id": request.message_id,
+            "feedback": request.feedback,
+            "timestamp": datetime.now().isoformat()
+        })
+        save_feedback(feedback_data)
+        
+        return {"status": "success", "message": "Feedback recorded"}
+    except Exception as e:
+        logger.error(f"Error saving feedback: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+def generate_sse_stream(question: str, top_k: int, model_name: str, temperature: float = 0.7):
+    """Generator for Server-Sent Events streaming response"""
+    start_time = time.time()
+    
+    try:
+        # Analyze query for reasoning trace
+        reasoning = rag_engine.analyze_query(question)
+        
+        # Retrieve relevant context
+        retrieval_start = time.time()
+        context_chunks, metadatas = rag_engine.retrieve(question, top_k=top_k)
+        retrieval_time = time.time() - retrieval_start
+        
+        logger.info(f"Retrieved {len(context_chunks)} chunks in {retrieval_time:.2f}s")
+        
+        if not context_chunks:
+            # No context found, use LLM directly with streaming
+            generation_start = time.time()
+            llm_thinking = ""
+            for result in llm_client.chat_stream(question):
+                if result.get('token'):  # Filter empty tokens
+                    yield f"data: {json.dumps({'token': result['token']})}\n\n"
+                if result.get('thinking'):
+                    llm_thinking += result['thinking']
+                    yield f"data: {json.dumps({'thinking': result['thinking']})}\n\n"
+            generation_time = time.time() - generation_start
+            
+            total_time = time.time() - start_time
+            
+            # Send empty sources
+            yield f"data: {json.dumps({'sources': []})}\n\n"
+            
+            # Send metadata
+            metadata = {
+                "model": model_name,
+                "retrieval_time": round(retrieval_time, 3),
+                "generation_time": round(generation_time, 3),
+                "total_time": round(total_time, 3),
+                "chunks_used": 0,
+                "timestamp": datetime.now().isoformat()
+            }
+            yield f"data: {json.dumps({'metadata': metadata})}\n\n"
+            
+            # Send reasoning (include LLM thinking if present)
+            if llm_thinking:
+                reasoning['llm_thinking'] = llm_thinking
+            yield f"data: {json.dumps({'reasoning': reasoning})}\n\n"
+            
+            yield "data: [DONE]\n\n"
+            return
+        
+        # Stream answer generation with context
+        generation_start = time.time()
+        llm_thinking = ""
+        for result in llm_client.generate_answer_stream(question, context_chunks, temperature):
+            if result.get('token'):  # Filter empty tokens
+                yield f"data: {json.dumps({'token': result['token']})}\n\n"
+            if result.get('thinking'):
+                llm_thinking += result['thinking']
+                yield f"data: {json.dumps({'thinking': result['thinking']})}\n\n"
+        generation_time = time.time() - generation_start
+        
+        total_time = time.time() - start_time
+        
+        # Format sources with metadata and confidence
+        sources = []
+        for i, (chunk, metadata) in enumerate(zip(context_chunks, metadatas)):
+            source_file = metadata.get('source', 'Unknown')
+            file_path = f"/api/documents/{source_file}" if source_file != 'Unknown' else ""
+            
+            sources.append({
+                "text": chunk[:300] + "..." if len(chunk) > 300 else chunk,
+                "source": source_file,
+                "chunk_id": f"chunk_{i}",
+                "page": metadata.get('page', 0),
+                "content_type": metadata.get('type', 'text'),
+                "file_path": file_path,
+                "char_count": metadata.get('char_count', len(chunk)),
+                "token_count": metadata.get('token_count', len(chunk) // 4),
+                "confidence": metadata.get('confidence', 0.5)
+            })
+        
+        # Send sources
+        yield f"data: {json.dumps({'sources': sources})}\n\n"
+        
+        # Send metadata
+        response_metadata = {
+            "model": model_name,
+            "retrieval_time": round(retrieval_time, 3),
+            "generation_time": round(generation_time, 3),
+            "total_time": round(total_time, 3),
+            "chunks_used": len(context_chunks),
+            "timestamp": datetime.now().isoformat()
+        }
+        yield f"data: {json.dumps({'metadata': response_metadata})}\n\n"
+        
+        # Send reasoning (include LLM thinking if present)
+        if llm_thinking:
+            reasoning['llm_thinking'] = llm_thinking
+        yield f"data: {json.dumps({'reasoning': reasoning})}\n\n"
+        
+        yield "data: [DONE]\n\n"
+        
+    except Exception as e:
+        logger.error(f"Streaming error: {str(e)}", exc_info=True)
+        yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        yield "data: [DONE]\n\n"
+
+@app.post("/api/chat")
+async def chat(request: ChatRequest):
+    """
+    Answer questions using RAG with optional streaming
+    """
+    start_time = time.time()
+    logger.info(f"Received question: {request.question}, stream={request.stream}, model={request.model}")
+    
+    # Get model name from mapping
+    model_name = MODEL_MAPPING.get(request.model, "qwen3:1.7b")
+    
+    # Handle streaming request
+    if request.stream:
+        return StreamingResponse(
+            generate_sse_stream(request.question, request.top_k, model_name, request.temperature),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no"
+            }
+        )
+    
+    # Non-streaming response
+    try:
+        # Analyze query for reasoning trace
+        reasoning = rag_engine.analyze_query(request.question)
+        
         # Retrieve relevant context
         retrieval_start = time.time()
         context_chunks, metadatas = rag_engine.retrieve(request.question, top_k=request.top_k)
@@ -112,13 +297,14 @@ async def chat(request: ChatRequest):
                 answer=answer,
                 sources=[],
                 metadata={
-                    "model": "qwen3:1.7b",
-                    "retrieval_time": retrieval_time,
-                    "generation_time": generation_time,
-                    "total_time": total_time,
+                    "model": model_name,
+                    "retrieval_time": round(retrieval_time, 3),
+                    "generation_time": round(generation_time, 3),
+                    "total_time": round(total_time, 3),
                     "chunks_used": 0,
                     "timestamp": datetime.now().isoformat()
-                }
+                },
+                reasoning=ReasoningTrace(**reasoning)
             )
         
         # Generate answer with context
@@ -129,36 +315,38 @@ async def chat(request: ChatRequest):
         total_time = time.time() - start_time
         logger.info(f"Answer generated in {generation_time:.2f}s (total: {total_time:.2f}s)")
         
-        # Format sources with metadata
+        # Format sources with metadata and confidence
         sources = []
         for i, (chunk, metadata) in enumerate(zip(context_chunks, metadatas)):
             # Get file path for the uploaded document
             source_file = metadata.get('source', 'Unknown')
-            file_path = f"/api/pdf/{source_file}" if source_file != 'Unknown' else ""
+            file_path = f"/api/documents/{source_file}" if source_file != 'Unknown' else ""
             
             sources.append(SourceChunk(
-                text=chunk[:200] + "..." if len(chunk) > 200 else chunk,
+                text=chunk[:300] + "..." if len(chunk) > 300 else chunk,
                 source=source_file,
                 chunk_id=f"chunk_{i}",
                 page=metadata.get('page', 0),
                 content_type=metadata.get('type', 'text'),
                 file_path=file_path,
-                char_count=metadata.get('char_count', 0),
-                token_count=metadata.get('token_count', 0),
-                char_count_raw=metadata.get('char_count_raw', 0)
+                char_count=metadata.get('char_count', len(chunk)),
+                token_count=metadata.get('token_count', len(chunk) // 4),
+                char_count_raw=metadata.get('char_count_raw', len(chunk)),
+                confidence=metadata.get('confidence', 0.5)
             ))
         
         return ChatResponse(
             answer=answer,
             sources=sources,
             metadata={
-                "model": "qwen3:1.7b",
-                "retrieval_time": retrieval_time,
-                "generation_time": generation_time,
-                "total_time": total_time,
+                "model": model_name,
+                "retrieval_time": round(retrieval_time, 3),
+                "generation_time": round(generation_time, 3),
+                "total_time": round(total_time, 3),
                 "chunks_used": len(context_chunks),
                 "timestamp": datetime.now().isoformat()
-            }
+            },
+            reasoning=ReasoningTrace(**reasoning)
         )
         
     except Exception as e:
@@ -182,10 +370,16 @@ async def serve_pdf(filename: str):
     
     return FileResponse(file_path, media_type="application/pdf")
 
-#for review Pdfs 
 @app.get("/api/documents/{filename}")
 async def get_document(filename: str):
-    file_path = Path(f"./uploads/{filename}")
+    """Serve documents for PDF preview"""
+    # Check in uploads directory first
+    file_path = Path("data/uploads") / filename
+    
+    if not file_path.exists():
+        # Check in data directory
+        file_path = Path("data") / filename
+    
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="PDF not found")
     
@@ -214,9 +408,12 @@ async def upload_document(file: UploadFile = File(...)):
         os.makedirs(upload_dir, exist_ok=True)
         
         file_path = os.path.join(upload_dir, file.filename)
+        file_size = 0
         
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            content = await file.read()
+            file_size = len(content)
+            buffer.write(content)
         
         logger.info(f"File saved to: {file_path}")
         
@@ -228,10 +425,20 @@ async def upload_document(file: UploadFile = File(...)):
         total_time = time.time() - start_time
         logger.info(f"Document ingested in {ingest_time:.2f}s (total: {total_time:.2f}s)")
         
+        # Parse chunks count from result message
+        chunks_created = 0
+        if "chunks" in result.lower():
+            try:
+                chunks_created = int(result.split()[2])  # "Successfully processed X chunks..."
+            except:
+                chunks_created = 0
+        
         return {
             "status": "success",
             "message": result,
             "filename": file.filename,
+            "file_size": file_size,
+            "chunks_created": chunks_created,
             "processing_time": round(total_time, 2)
         }
         
