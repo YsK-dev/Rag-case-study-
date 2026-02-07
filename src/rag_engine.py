@@ -1,7 +1,7 @@
 import os
 import chromadb
 from typing import List, Dict, Tuple
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 import pdfplumber
 #import pymupdf as fitz
 import re
@@ -20,7 +20,12 @@ class RAGEngine:
         # 3. Initialize Embedding Model | we use all-MiniLM-L6-v2 but we could try even more like all-MiniLM-L12-v2  all-mpnet-base-v2 or if we deal with türkçe we could use newmindai/TurkEmbed4Retrieval boun-tabilab/TabiBERT/dbmdz/bert-base-turkish-cased
         print("Loading embedding model... (this happens only once)")
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        print("Model loaded.")
+        
+        # 4. Initialize Reranker (Method learned from LightRAG)
+        # CrossEncoder is slower but much more accurate for the final scoring
+        print("Loading reranker model...")
+        self.reranker = CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+        print("Models loaded.")
 
     def _detect_content_type(self, text: str) -> str:
         """Detect if text contains equations, code, or tables."""
@@ -229,23 +234,91 @@ class RAGEngine:
 
     def retrieve(self, query: str, top_k: int = 3) -> Tuple[List[str], List[Dict]]:
         """
-        Retrieves the most relevant text chunks with metadata.
-        Returns: (documents, metadatas)
+        Retrieves the most relevant text chunks with metadata and confidence scores.
+        Implementation of Two-Stage Retrieval (Vector Search + Reranking) inspired by LightRAG.
+        Returns: (documents, metadatas) where metadatas includes 'confidence' field.
         """
+        # 1. Fetch more candidates than needed (e.g., 3x top_k) for the reranker to screen
+        initial_k = top_k * 3
+        
         # Convert query to embedding
         query_embedding = self.embedding_model.encode([query]).tolist()
         
         # Search the database
         results = self.collection.query(
             query_embeddings=query_embedding,
-            n_results=top_k
+            n_results=initial_k,
+            include=['documents', 'metadatas', 'distances']
         )
         
-        # Return documents and metadata
-        if results and results['documents']:
-            documents = results['documents'][0]
-            metadatas = results.get('metadatas', [[]])[0]
-            return documents, metadatas
-        return [], []
+        if not results or not results['documents'] or not results['documents'][0]:
+            return [], []
+
+        flat_docs = results['documents'][0]
+        flat_metas = results['metadatas'][0] if results.get('metadatas') else [{}] * len(flat_docs)
+        
+        # 2. Reranking Step (The LightRAG improvement)
+        # Create pairs of [query, doc] for the Cross-Encoder
+        pairs = [[query, doc] for doc in flat_docs]
+        
+        # Predict scores (higher is better)
+        rerank_scores = self.reranker.predict(pairs)
+        
+        # Combine docs, metas, and scores
+        scored_results = []
+        for doc, meta, score in zip(flat_docs, flat_metas, rerank_scores):
+            # Normalize score to 0-1 range roughly (sigmoid)
+            # CrossEncoder scores are logits, usually between -10 and 10
+            import math
+            confidence = 1 / (1 + math.exp(-score))
+            
+            enriched_meta = dict(meta) if meta else {}
+            enriched_meta['confidence'] = round(confidence, 3)
+            enriched_meta['rerank_score'] = float(score) # Store raw score for debugging
+            
+            scored_results.append({
+                'doc': doc,
+                'meta': enriched_meta,
+                'score': score
+            })
+            
+        # Sort by the new reranker score (descending)
+        scored_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Slice to the requested top_k
+        final_results = scored_results[:top_k]
+        
+        final_docs = [item['doc'] for item in final_results]
+        final_metas = [item['meta'] for item in final_results]
+            
+        return final_docs, final_metas
+    
+    def analyze_query(self, query: str) -> dict:
+        """
+        Analyze the query to extract search terms and generate query rewrite.
+        Returns reasoning trace for transparency.
+        """
+        import re
+        
+        # Extract key words (remove stopwords and short words)
+        stopwords = {'what', 'is', 'the', 'a', 'an', 'how', 'does', 'do', 'can', 'could', 
+                     'would', 'should', 'will', 'are', 'was', 'were', 'been', 'being',
+                     'have', 'has', 'had', 'of', 'to', 'for', 'in', 'on', 'with', 'by',
+                     'about', 'this', 'that', 'these', 'those', 'it', 'its', 'and', 'or'}
+        
+        # Tokenize and filter
+        words = re.findall(r'\b\w+\b', query.lower())
+        search_terms = [w for w in words if w not in stopwords and len(w) > 2]
+        
+        # Generate query rewrite - simplified expansion
+        query_rewrite = query.strip()
+        if query_rewrite.endswith('?'):
+            query_rewrite = query_rewrite[:-1]
+        
+        return {
+            'query_rewrite': query_rewrite,
+            'search_terms': search_terms[:6],  # Limit to 6 terms
+            'retrieval_strategy': f"Semantic search using local embeddings (all-MiniLM-L6-v2)"
+        }
     
 RAGEngine = RAGEngine
