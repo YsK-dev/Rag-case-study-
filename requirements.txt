@@ -14,3 +14,4 @@ beautifulsoup4
 # faiss-cpu  # Optional: uncomment for FAISS backend (may fail on some platforms)
 numpy
 rank-bm25
+pytest

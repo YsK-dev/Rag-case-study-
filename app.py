@@ -11,14 +11,23 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, conint, confloat
+from starlette.concurrency import run_in_threadpool
 import logging
 import time
 import json
 from typing import Optional, List, Dict
 
+# Detect test mode BEFORE heavy imports to avoid loading models
+TESTING = os.getenv("RAG_TESTING") == "1"
+
+if not TESTING:
 from rag_engine import RAGEngine
 from llm_client import OllamaClient, sanitize_input
+from judge import judge_with_groq, JudgeError, DEFAULT_GROQ_MODEL
+else:
+    # Import only sanitize_input for tests (lightweight)
+    from llm_client import sanitize_input
 
 # Project paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -70,47 +79,56 @@ MODEL_MAPPING = {
 }
 
 # Initialize RAG components
-print("Initializing RAG Engine (ChromaDB)...")
-rag_engine_chroma = RAGEngine(
-    db_path=str(BASE_DIR / "chroma_db_web"),
-    collection_name="web_docs",
-    backend="chroma",
-)
+if TESTING:
+    from testing_stubs import DummyRAGEngine, DummyLLMClient
 
-# Try to initialize FAISS (optional - graceful fallback if not installed)
-rag_engine_faiss = None
-try:
-    print("Initializing RAG Engine (FAISS)...")
-    rag_engine_faiss = RAGEngine(
-        db_path=str(BASE_DIR / "faiss_db"),
-        backend="faiss",
-        embedding_model=rag_engine_chroma.embedding_model,
-        reranker=rag_engine_chroma.reranker,
+    rag_engine_chroma = DummyRAGEngine()
+    rag_engine_faiss = None
+    rag_engines = {"chroma": rag_engine_chroma}
+    rag_engine = rag_engine_chroma
+    llm_client = DummyLLMClient()
+else:
+    print("Initializing RAG Engine (ChromaDB)...")
+    rag_engine_chroma = RAGEngine(
+        db_path=str(BASE_DIR / "chroma_db_web"),
+        collection_name="web_docs",
+        backend="chroma",
     )
-    print("FAISS engine initialized successfully.")
-except Exception as e:
-    logger.warning(f"FAISS not available, using ChromaDB only: {e}")
-    print(f"FAISS not available ({e}), using ChromaDB only.")
 
-# Convenience mapping (only include FAISS if available)
-rag_engines = {"chroma": rag_engine_chroma}
-if rag_engine_faiss is not None:
-    rag_engines["faiss"] = rag_engine_faiss
+    # Try to initialize FAISS (optional - graceful fallback if not installed)
+    rag_engine_faiss = None
+    try:
+        print("Initializing RAG Engine (FAISS)...")
+        rag_engine_faiss = RAGEngine(
+            db_path=str(BASE_DIR / "faiss_db"),
+            backend="faiss",
+            embedding_model=rag_engine_chroma.embedding_model,
+            reranker=rag_engine_chroma.reranker,
+        )
+        print("FAISS engine initialized successfully.")
+    except Exception as e:
+        logger.warning(f"FAISS not available, using ChromaDB only: {e}")
+        print(f"FAISS not available ({e}), using ChromaDB only.")
 
-# Keep a default alias for backward compatibility
-rag_engine = rag_engine_chroma
+    # Convenience mapping (only include FAISS if available)
+    rag_engines = {"chroma": rag_engine_chroma}
+    if rag_engine_faiss is not None:
+        rag_engines["faiss"] = rag_engine_faiss
 
-print("Initializing Ollama LLM...")
-llm_client = OllamaClient(model="qwen3:1.7b")
-print("Server ready!")
+    # Keep a default alias for backward compatibility
+    rag_engine = rag_engine_chroma
+
+    print("Initializing Ollama LLM...")
+    llm_client = OllamaClient(model="qwen3:1.7b")
+    print("Server ready!")
 
 # Pydantic models
 class ChatRequest(BaseModel):
     question: str
-    top_k: int = 3
+    top_k: conint(ge=1, le=20) = 3
     model: Optional[str] = "gemini-1.5-flash"
     stream: Optional[bool] = False
-    temperature: Optional[float] = 0.7  # Temperature for LLM generation (0.0-1.0)
+    temperature: Optional[confloat(ge=0.0, le=1.0)] = 0.7  # Temperature for LLM generation (0.0-1.0)
     vector_store: Optional[str] = "chroma"  # "chroma" or "faiss"
     conversation_id: Optional[str] = None  # For multi-turn conversations
     source_filter: Optional[str] = None  # Filter by document name
@@ -121,6 +139,20 @@ class FeedbackRequest(BaseModel):
 
 class DeleteDocumentRequest(BaseModel):
     source: str  # filename to delete
+
+class JudgeRequest(BaseModel):
+    question: str
+    answer: str
+    sources: Optional[List[SourceChunk]] = None
+    criteria: Optional[str] = None
+    model: Optional[str] = None
+
+class JudgeResponse(BaseModel):
+    score: float
+    verdict: str
+    feedback: List[str]
+    rationale: Optional[str] = None
+    model: Optional[str] = None
 
 class ReasoningTrace(BaseModel):
     query_rewrite: str = ""
@@ -439,6 +471,9 @@ async def chat(request: ChatRequest):
             status_code=400,
             detail="Your message was flagged as a potential prompt injection and has been rejected."
         )
+    cleaned_question = cleaned_question.strip()
+    if not cleaned_question:
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
     
     # Get model name from mapping
     model_name = MODEL_MAPPING.get(request.model, "qwen3:1.7b")
@@ -492,6 +527,14 @@ async def chat(request: ChatRequest):
 
             _append_history(request.conversation_id, "user", cleaned_question)
             _append_history(request.conversation_id, "assistant", LOW_CONFIDENCE_MSG)
+            _save_chat_message(
+                request.conversation_id,
+                {"role": "user", "content": cleaned_question, "timestamp": datetime.now().isoformat()},
+            )
+            _save_chat_message(
+                request.conversation_id,
+                {"role": "assistant", "content": LOW_CONFIDENCE_MSG, "timestamp": datetime.now().isoformat()},
+            )
 
             return ChatResponse(
                 answer=LOW_CONFIDENCE_MSG,
@@ -575,7 +618,12 @@ async def serve_pdf(filename: str):
 @app.get("/api/documents")
 async def list_documents(vector_store: str = "chroma"):
     """List all documents stored in the vector store."""
-    engine = rag_engines.get(vector_store, rag_engine)
+    if vector_store not in rag_engines:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid vector_store '{vector_store}'. Use one of: {', '.join(rag_engines.keys())}."
+        )
+    engine = rag_engines[vector_store]
     docs = engine.list_documents()
     return {"documents": docs, "vector_store": vector_store}
 
@@ -610,6 +658,8 @@ async def get_chat_history(conversation_id: str):
 @app.delete("/api/chat/history/{conversation_id}")
 async def clear_chat_history(conversation_id: str):
     """Clear persisted chat history for a conversation."""
+    if not _validate_conversation_id(conversation_id):
+        raise HTTPException(status_code=400, detail="Invalid conversation_id")
     history_file = CHAT_HISTORY_DIR / f"{conversation_id}.json"
     if history_file.exists():
         os.remove(history_file)
@@ -743,6 +793,9 @@ async def upload_document(file: UploadFile = File(...)):
             "processing_time": round(total_time, 2)
         }
         
+    except HTTPException:
+        # Re-raise expected HTTP errors (e.g., invalid file type)
+        raise
     except Exception as e:
         logger.error(f"Error uploading file: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
