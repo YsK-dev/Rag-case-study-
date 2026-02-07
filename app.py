@@ -1,23 +1,35 @@
+import sys
+import os
+from pathlib import Path
+
+# Add src to path BEFORE any relative imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel
-from pathlib import Path
-import sys
-import os
-import shutil
 import logging
 import time
 import json
-from datetime import datetime
 from typing import Optional, List
-
-# Add src to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from rag_engine import RAGEngine
 from llm_client import OllamaClient
+
+# Project paths
+BASE_DIR = Path(__file__).resolve().parent
+DATA_DIR = BASE_DIR / "data"
+UPLOAD_DIR = DATA_DIR / "uploads"
+STATIC_DIR = BASE_DIR / "static"
+
+# Supported file types (aligned with RAGEngine)
+SUPPORTED_EXTENSIONS = {
+    ".pdf", ".txt", ".md", ".docx",
+    ".xlsx", ".xlsm", ".csv",
+    ".html", ".htm", ".pptx",
+}
 
 # Setup logging
 logging.basicConfig(
@@ -56,7 +68,10 @@ MODEL_MAPPING = {
 
 # Initialize RAG components
 print("Initializing RAG Engine...")
-rag_engine = RAGEngine(db_path="./chroma_db_web", collection_name="web_docs")
+rag_engine = RAGEngine(
+    db_path=str(BASE_DIR / "chroma_db_web"),
+    collection_name="web_docs"
+)
 print("Initializing Ollama LLM...")
 llm_client = OllamaClient(model="qwen3:1.7b")
 print("Server ready!")
@@ -77,6 +92,7 @@ class ReasoningTrace(BaseModel):
     query_rewrite: str = ""
     search_terms: List[str] = []
     retrieval_strategy: str = ""
+    llm_thinking: Optional[str] = None
 
 class SourceChunk(BaseModel):
     text: str
@@ -97,24 +113,31 @@ class ChatResponse(BaseModel):
     reasoning: Optional[ReasoningTrace] = None
 
 # Feedback storage path
-FEEDBACK_FILE = "data/feedback.json"
+FEEDBACK_FILE = DATA_DIR / "feedback.json"
 
 def load_feedback():
-    if os.path.exists(FEEDBACK_FILE):
+    if FEEDBACK_FILE.exists():
         with open(FEEDBACK_FILE, 'r') as f:
             return json.load(f)
     return {"entries": []}
 
 def save_feedback(data):
-    os.makedirs(os.path.dirname(FEEDBACK_FILE), exist_ok=True)
+    os.makedirs(FEEDBACK_FILE.parent, exist_ok=True)
     with open(FEEDBACK_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
 # API Endpoints
 @app.get("/")
 async def root():
-    """Serve the frontend"""
-    return FileResponse("static/index.html")
+    """Serve the frontend if available, otherwise return API info."""
+    index_path = STATIC_DIR / "index.html"
+    if index_path.exists():
+        return FileResponse(index_path)
+    return {
+        "status": "ok",
+        "message": "RAG API is running",
+        "docs": "/docs"
+    }
 
 @app.get("/api/health")
 async def health_check():
@@ -144,6 +167,9 @@ def generate_sse_stream(question: str, top_k: int, model_name: str, temperature:
     """Generator for Server-Sent Events streaming response"""
     start_time = time.time()
     
+    # Switch LLM model if needed
+    llm_client.model = model_name
+    
     try:
         # Analyze query for reasoning trace
         reasoning = rag_engine.analyze_query(question)
@@ -159,7 +185,7 @@ def generate_sse_stream(question: str, top_k: int, model_name: str, temperature:
             # No context found, use LLM directly with streaming
             generation_start = time.time()
             llm_thinking = ""
-            for result in llm_client.chat_stream(question):
+            for result in llm_client.chat_stream(question, temperature):
                 if result.get('token'):  # Filter empty tokens
                     yield f"data: {json.dumps({'token': result['token']})}\n\n"
                 if result.get('thinking'):
@@ -273,6 +299,9 @@ async def chat(request: ChatRequest):
     
     # Non-streaming response
     try:
+        # Switch LLM model if needed
+        llm_client.model = model_name
+        
         # Analyze query for reasoning trace
         reasoning = rag_engine.analyze_query(request.question)
         
@@ -287,7 +316,7 @@ async def chat(request: ChatRequest):
             # No context found, use LLM directly
             logger.warning("No relevant context found, using LLM without RAG")
             generation_start = time.time()
-            answer = llm_client.chat(request.question)
+            answer = llm_client.chat(request.question, request.temperature)
             generation_time = time.time() - generation_start
             
             total_time = time.time() - start_time
@@ -304,12 +333,12 @@ async def chat(request: ChatRequest):
                     "chunks_used": 0,
                     "timestamp": datetime.now().isoformat()
                 },
-                reasoning=ReasoningTrace(**reasoning)
+                reasoning=ReasoningTrace(**reasoning, llm_thinking=llm_client.last_thinking)
             )
         
         # Generate answer with context
         generation_start = time.time()
-        answer = llm_client.generate_answer(request.question, context_chunks)
+        answer, _thinking = llm_client.generate_answer(request.question, context_chunks, request.temperature)
         generation_time = time.time() - generation_start
         
         total_time = time.time() - start_time
@@ -346,7 +375,7 @@ async def chat(request: ChatRequest):
                 "chunks_used": len(context_chunks),
                 "timestamp": datetime.now().isoformat()
             },
-            reasoning=ReasoningTrace(**reasoning)
+            reasoning=ReasoningTrace(**reasoning, llm_thinking=_thinking)
         )
         
     except Exception as e:
@@ -355,59 +384,71 @@ async def chat(request: ChatRequest):
 
 @app.get("/api/pdf/{filename}")
 async def serve_pdf(filename: str):
-    """
-    Serve PDF files for viewing
-    """
-    # Check in uploads directory
-    file_path = os.path.join("data/uploads", filename)
-    
-    if not os.path.exists(file_path):
-        # Check in data directory
-        file_path = os.path.join("data", filename)
-    
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail="PDF not found")
-    
-    return FileResponse(file_path, media_type="application/pdf")
+    """Legacy PDF endpoint — redirects to the generic documents endpoint."""
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url=f"/api/documents/{filename}")
 
 @app.get("/api/documents/{filename}")
 async def get_document(filename: str):
-    """Serve documents for PDF preview"""
-    # Check in uploads directory first
-    file_path = Path("data/uploads") / filename
-    
+    """Serve uploaded documents for preview (PDF, DOCX, XLSX, CSV, MD, TXT, HTML, PPTX)."""
+    safe_name = Path(filename).name
+    ext = Path(safe_name).suffix.lower()
+
+    mime_map = {
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ".xlsm": "application/vnd.ms-excel.sheet.macroEnabled.12",
+        ".csv": "text/csv",
+        ".txt": "text/plain",
+        ".md": "text/markdown",
+        ".html": "text/html",
+        ".htm": "text/html",
+        ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    }
+
+    if ext not in mime_map:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {ext}"
+        )
+
+    file_path = UPLOAD_DIR / safe_name
     if not file_path.exists():
-        # Check in data directory
-        file_path = Path("data") / filename
-    
+        file_path = DATA_DIR / safe_name
     if not file_path.exists():
-        raise HTTPException(status_code=404, detail="PDF not found")
-    
+        raise HTTPException(status_code=404, detail="Document not found")
+
     return FileResponse(
         file_path,
-        media_type="application/pdf",
-        filename=filename
+        media_type=mime_map[ext],
+        filename=safe_name
     )
 
 @app.post("/api/upload")
 async def upload_document(file: UploadFile = File(...)):
     """
-    Upload and ingest a PDF document
+    Upload and ingest a document (PDF, DOCX, XLSX, CSV, TXT, MD, HTML, PPTX)
     """
     start_time = time.time()
     logger.info(f"Uploading file: {file.filename}")
     
     try:
         # Validate file type
-        if not file.filename.endswith('.pdf'):
+        safe_name = Path(file.filename).name
+        file_ext = Path(safe_name).suffix.lower()
+        if file_ext not in SUPPORTED_EXTENSIONS:
             logger.warning(f"Invalid file type: {file.filename}")
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+            allowed = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported file type. Allowed: {allowed}"
+            )
         
         # Save uploaded file
-        upload_dir = "data/uploads"
-        os.makedirs(upload_dir, exist_ok=True)
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
         
-        file_path = os.path.join(upload_dir, file.filename)
+        file_path = UPLOAD_DIR / safe_name
         file_size = 0
         
         with open(file_path, "wb") as buffer:
@@ -430,13 +471,13 @@ async def upload_document(file: UploadFile = File(...)):
         if "chunks" in result.lower():
             try:
                 chunks_created = int(result.split()[2])  # "Successfully processed X chunks..."
-            except:
+            except (ValueError, IndexError):
                 chunks_created = 0
         
         return {
             "status": "success",
             "message": result,
-            "filename": file.filename,
+            "filename": safe_name,
             "file_size": file_size,
             "chunks_created": chunks_created,
             "processing_time": round(total_time, 2)
@@ -446,8 +487,91 @@ async def upload_document(file: UploadFile = File(...)):
         logger.error(f"Error uploading file: {str(e)}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.get("/api/documents/{filename}/preview")
+async def preview_document(filename: str):
+    """Extract text/table content from non-PDF documents for in-browser preview."""
+    safe_name = Path(filename).name
+    ext = Path(safe_name).suffix.lower()
+
+    previewable = {".docx", ".xlsx", ".xlsm", ".csv", ".pptx", ".txt", ".md", ".html", ".htm"}
+    if ext not in previewable:
+        raise HTTPException(status_code=400, detail=f"Preview not supported for {ext}")
+
+    file_path = UPLOAD_DIR / safe_name
+    if not file_path.exists():
+        file_path = DATA_DIR / safe_name
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    try:
+        if ext in (".txt", ".md"):
+            with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+                return {"type": "text", "content": fh.read(), "filename": safe_name}
+
+        if ext in (".html", ".htm"):
+            with open(file_path, "r", encoding="utf-8", errors="replace") as fh:
+                return {"type": "html", "content": fh.read(), "filename": safe_name}
+
+        if ext == ".csv":
+            import csv as csv_mod
+            rows = []
+            with open(file_path, "r", newline="", encoding="utf-8", errors="replace") as fh:
+                reader = csv_mod.reader(fh)
+                for row in reader:
+                    rows.append(row)
+            return {"type": "table", "sheets": [{"name": safe_name, "rows": rows}], "filename": safe_name}
+
+        if ext in (".xlsx", ".xlsm"):
+            from openpyxl import load_workbook as _load_wb
+            wb = _load_wb(str(file_path), data_only=True, read_only=True)
+            sheets = []
+            for sheet in wb.worksheets:
+                rows = []
+                for row in sheet.iter_rows(values_only=True):
+                    rows.append(["" if c is None else str(c) for c in row])
+                sheets.append({"name": sheet.title, "rows": rows})
+            return {"type": "table", "sheets": sheets, "filename": safe_name}
+
+        if ext == ".docx":
+            from docx import Document as _Document
+            doc = _Document(str(file_path))
+            paragraphs = [p.text for p in doc.paragraphs if p.text and p.text.strip()]
+            tables = []
+            for table in doc.tables:
+                tbl_rows = []
+                for row in table.rows:
+                    tbl_rows.append([cell.text.strip() for cell in row.cells])
+                tables.append(tbl_rows)
+            return {
+                "type": "docx",
+                "paragraphs": paragraphs,
+                "tables": tables,
+                "filename": safe_name,
+            }
+
+        if ext == ".pptx":
+            from pptx import Presentation as _Presentation
+            prs = _Presentation(str(file_path))
+            slides = []
+            for slide in prs.slides:
+                texts = []
+                for shape in slide.shapes:
+                    if hasattr(shape, "text") and shape.text:
+                        texts.append(shape.text)
+                slides.append("\n".join(texts))
+            return {"type": "pptx", "slides": slides, "filename": safe_name}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Preview extraction failed: {str(e)}") from e
+
+    raise HTTPException(status_code=400, detail=f"Preview not supported for {ext}")
+
 # Mount static files
-app.mount("/static", StaticFiles(directory="static"), name="static")
+if STATIC_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+else:
+    logger.warning("Static directory not found; skipping static file mount.")
 
 if __name__ == "__main__":
     import uvicorn

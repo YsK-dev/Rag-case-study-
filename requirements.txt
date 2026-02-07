@@ -7,3 +7,7 @@ pypdf
 python-multipart
 ollama
 pymupdf
+python-docx
+openpyxl
+python-pptx
+beautifulsoup4

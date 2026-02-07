@@ -139,18 +139,18 @@ Answer (include [1], [2], etc. citations after statements that use information f
                     # Check for thinking tags (qwen3 uses <think>...</think>)
                     if '<think>' in token:
                         in_thinking = True
-                        # Extract any content before the tag
-                        before = token.split('<think>')[0]
-                        if before:
-                            yield {'token': before}
+                        parts = token.split('<think>', 1)
+                        if parts[0]:
+                            yield {'token': parts[0]}
+                        if len(parts) > 1 and parts[1]:
+                            thinking_buffer += parts[1]
                         continue
                     
                     if '</think>' in token:
                         in_thinking = False
-                        # Extract thinking content and any after
-                        parts = token.split('</think>')
+                        parts = token.split('</think>', 1)
+                        thinking_buffer += parts[0]
                         if thinking_buffer:
-                            thinking_buffer += parts[0]
                             yield {'thinking': thinking_buffer}
                             thinking_buffer = ""
                         if len(parts) > 1 and parts[1]:
@@ -192,7 +192,19 @@ Answer (include [1], [2], etc. citations after statements that use information f
                     "temperature": temperature,
                 }
             )
-            return response['response'].strip()
+            answer = response['response'].strip()
+            thinking = ""
+
+            # Extract thinking from response if present (qwen3 format: <think>...</think>)
+            if '<think>' in answer and '</think>' in answer:
+                start = answer.find('<think>')
+                end = answer.find('</think>') + len('</think>')
+                thinking = answer[start+7:end-8].strip()
+                answer = answer[:start] + answer[end:]
+                answer = answer.strip()
+
+            self.last_thinking = thinking
+            return answer
         except Exception as e:
             return f"Error: {str(e)}"
     
@@ -222,16 +234,18 @@ Answer (include [1], [2], etc. citations after statements that use information f
                     
                     if '<think>' in token:
                         in_thinking = True
-                        before = token.split('<think>')[0]
-                        if before:
-                            yield {'token': before}
+                        parts = token.split('<think>', 1)
+                        if parts[0]:
+                            yield {'token': parts[0]}
+                        if len(parts) > 1 and parts[1]:
+                            thinking_buffer += parts[1]
                         continue
                     
                     if '</think>' in token:
                         in_thinking = False
-                        parts = token.split('</think>')
+                        parts = token.split('</think>', 1)
+                        thinking_buffer += parts[0]
                         if thinking_buffer:
-                            thinking_buffer += parts[0]
                             yield {'thinking': thinking_buffer}
                             thinking_buffer = ""
                         if len(parts) > 1 and parts[1]:
@@ -259,5 +273,4 @@ if __name__ == "__main__":
     print("Testing Ollama connection...")
     response = client.chat("Hello! Can you introduce yourself?")
     print(f"Response: {response}")
-
 
