@@ -2,8 +2,7 @@ import os
 import chromadb
 from typing import List, Dict, Tuple
 from sentence_transformers import SentenceTransformer, CrossEncoder
-import pdfplumber
-#import pymupdf as fitz
+import fitz  # PyMuPDF
 import re
 
 class RAGEngine:
@@ -75,37 +74,40 @@ class RAGEngine:
         Returns list of chunks with metadata.
         """
         chunks = []
-        
-        with pdfplumber.open(file_path) as pdf:
-            for page_num, page in enumerate(pdf.pages, 1):
-                # Extract text with layout preservation
-                text = page.extract_text(layout=True)
-                
+
+        with fitz.open(file_path) as doc:
+            for page_index in range(len(doc)):
+                page_num = page_index + 1
+                page = doc[page_index]
+
+                # Extract text with layout preservation (sorted reading order)
+                text = page.get_text("text", sort=True)
+
                 if not text or not text.strip():
                     continue
-                
-                # Extract tables separately
-                tables = page.extract_tables()
-                
+
+                # Extract tables separately (best-effort, PyMuPDF >= 1.22)
+                tables = self._extract_tables_pymupdf(page)
+
                 # Split page into paragraphs (double newline)
                 paragraphs = re.split(r'\n\n+', text)
-                
+
                 for para in paragraphs:
                     para = para.strip()
                     if len(para) < 50:  # Skip very short paragraphs
                         continue
-                    
+
                     content_type = self._detect_content_type(para)
-                    
+
                     chunks.append({
                         'text': para,
                         'page': page_num,
                         'type': content_type,
                         'source': os.path.basename(file_path)
                     })
-                
+
                 # Add tables as separate chunks
-                for table_idx, table in enumerate(tables):
+                for table in tables:
                     if table:
                         # Format table as markdown
                         table_text = self._format_table(table)
@@ -117,6 +119,33 @@ class RAGEngine:
                         })
         
         return chunks
+
+    def _extract_tables_pymupdf(self, page) -> List[List[List[str]]]:
+        """
+        Best-effort table extraction with PyMuPDF.
+        Returns list of tables (each table is list of rows).
+        """
+        if not hasattr(page, "find_tables"):
+            return []
+
+        try:
+            table_finder = page.find_tables()
+        except Exception:
+            return []
+
+        if not table_finder or not getattr(table_finder, "tables", None):
+            return []
+
+        tables = []
+        for table in table_finder.tables:
+            try:
+                table_rows = table.extract()
+            except Exception:
+                continue
+            if table_rows:
+                tables.append(table_rows)
+
+        return tables
 
     def _format_table(self, table: List[List]) -> str:
         """Format table data as markdown."""
