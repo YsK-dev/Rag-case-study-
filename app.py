@@ -1,6 +1,8 @@
 import sys
 import os
 from pathlib import Path
+from datetime import datetime
+from collections import defaultdict
 
 # Add src to path BEFORE any relative imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
@@ -13,10 +15,10 @@ from pydantic import BaseModel
 import logging
 import time
 import json
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from rag_engine import RAGEngine
-from llm_client import OllamaClient
+from llm_client import OllamaClient, sanitize_input
 
 # Project paths
 BASE_DIR = Path(__file__).resolve().parent
@@ -50,10 +52,11 @@ app = FastAPI(
 )
 
 # Add CORS middleware
+# Note: If using credentials (cookies/auth headers), replace "*" with specific origins
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,  # Cannot use True with allow_origins=["*"]
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -67,11 +70,36 @@ MODEL_MAPPING = {
 }
 
 # Initialize RAG components
-print("Initializing RAG Engine...")
-rag_engine = RAGEngine(
+print("Initializing RAG Engine (ChromaDB)...")
+rag_engine_chroma = RAGEngine(
     db_path=str(BASE_DIR / "chroma_db_web"),
-    collection_name="web_docs"
+    collection_name="web_docs",
+    backend="chroma",
 )
+
+# Try to initialize FAISS (optional - graceful fallback if not installed)
+rag_engine_faiss = None
+try:
+    print("Initializing RAG Engine (FAISS)...")
+    rag_engine_faiss = RAGEngine(
+        db_path=str(BASE_DIR / "faiss_db"),
+        backend="faiss",
+        embedding_model=rag_engine_chroma.embedding_model,
+        reranker=rag_engine_chroma.reranker,
+    )
+    print("FAISS engine initialized successfully.")
+except Exception as e:
+    logger.warning(f"FAISS not available, using ChromaDB only: {e}")
+    print(f"FAISS not available ({e}), using ChromaDB only.")
+
+# Convenience mapping (only include FAISS if available)
+rag_engines = {"chroma": rag_engine_chroma}
+if rag_engine_faiss is not None:
+    rag_engines["faiss"] = rag_engine_faiss
+
+# Keep a default alias for backward compatibility
+rag_engine = rag_engine_chroma
+
 print("Initializing Ollama LLM...")
 llm_client = OllamaClient(model="qwen3:1.7b")
 print("Server ready!")
@@ -83,16 +111,23 @@ class ChatRequest(BaseModel):
     model: Optional[str] = "gemini-1.5-flash"
     stream: Optional[bool] = False
     temperature: Optional[float] = 0.7  # Temperature for LLM generation (0.0-1.0)
+    vector_store: Optional[str] = "chroma"  # "chroma" or "faiss"
+    conversation_id: Optional[str] = None  # For multi-turn conversations
+    source_filter: Optional[str] = None  # Filter by document name
 
 class FeedbackRequest(BaseModel):
     message_id: str
     feedback: str  # "up" or "down"
+
+class DeleteDocumentRequest(BaseModel):
+    source: str  # filename to delete
 
 class ReasoningTrace(BaseModel):
     query_rewrite: str = ""
     search_terms: List[str] = []
     retrieval_strategy: str = ""
     llm_thinking: Optional[str] = None
+    source_filter: Optional[str] = None
 
 class SourceChunk(BaseModel):
     text: str
@@ -105,6 +140,9 @@ class SourceChunk(BaseModel):
     token_count: int = 0
     char_count_raw: int = 0
     confidence: float = 0.5
+    rerank_score: float = 0.0
+    cosine_similarity: float = 0.0
+    euclidean_distance: float = 0.0
 
 class ChatResponse(BaseModel):
     answer: str
@@ -126,6 +164,88 @@ def save_feedback(data):
     with open(FEEDBACK_FILE, 'w') as f:
         json.dump(data, f, indent=2)
 
+# ── Conversation history store (in-memory, keyed by conversation_id) ──
+# Each entry: list of {"role": "user"|"assistant", "content": str}
+_conversations: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+
+MAX_HISTORY_MESSAGES = 20  # max messages (not turns) kept per conversation
+
+def _get_history(conversation_id: Optional[str]) -> List[Dict[str, str]]:
+    if not conversation_id:
+        return []
+    return _conversations[conversation_id][-MAX_HISTORY_MESSAGES:]
+
+def _append_history(conversation_id: Optional[str], role: str, content: str):
+    if not conversation_id:
+        return
+    _conversations[conversation_id].append({"role": role, "content": content})
+    # Trim to avoid unbounded growth
+    if len(_conversations[conversation_id]) > MAX_HISTORY_MESSAGES * 2:
+        _conversations[conversation_id] = _conversations[conversation_id][-MAX_HISTORY_MESSAGES:]
+
+# ── Chat history persistence (save messages per conversation to disk) ──
+CHAT_HISTORY_DIR = DATA_DIR / "chat_history"
+
+def _validate_conversation_id(conversation_id: str) -> bool:
+    """Validate conversation_id to prevent path traversal attacks.
+    
+    Returns True if the ID is safe, False otherwise.
+    """
+    if not conversation_id:
+        return False
+    # Reject IDs with path separators, parent directory references, or hidden files
+    if '/' in conversation_id or '\\' in conversation_id:
+        return False
+    if '..' in conversation_id:
+        return False
+    if conversation_id.startswith('.'):
+        return False
+    # Ensure the resolved path stays within CHAT_HISTORY_DIR
+    try:
+        target = (CHAT_HISTORY_DIR / f"{conversation_id}.json").resolve()
+        chat_dir = CHAT_HISTORY_DIR.resolve()
+        if not str(target).startswith(str(chat_dir)):
+            return False
+    except Exception:
+        return False
+    return True
+
+def _save_chat_message(conversation_id: str, message: dict):
+    """Append a chat message to the on-disk history for a conversation."""
+    if not conversation_id or not _validate_conversation_id(conversation_id):
+        return
+    os.makedirs(CHAT_HISTORY_DIR, exist_ok=True)
+    history_file = CHAT_HISTORY_DIR / f"{conversation_id}.json"
+    history: list = []
+    if history_file.exists():
+        try:
+            with open(history_file, "r") as f:
+                history = json.load(f)
+        except Exception:
+            history = []
+    history.append(message)
+    with open(history_file, "w") as f:
+        json.dump(history, f, indent=2)
+
+def _load_chat_history(conversation_id: str) -> list:
+    """Load persisted chat history for a conversation."""
+    if not _validate_conversation_id(conversation_id):
+        return []
+    history_file = CHAT_HISTORY_DIR / f"{conversation_id}.json"
+    if history_file.exists():
+        try:
+            with open(history_file, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+LOW_CONFIDENCE_MSG = (
+    "I don't have enough information in the provided documents to answer "
+    "this question confidently. Please try rephrasing or uploading a more "
+    "relevant document."
+)
+
 # API Endpoints
 @app.get("/")
 async def root():
@@ -143,6 +263,18 @@ async def root():
 async def health_check():
     """Health check endpoint"""
     return {"status": "healthy", "model": llm_client.model}
+
+@app.get("/api/vector-stores")
+async def vector_stores():
+    """Return available vector store backends and their stats."""
+    return {
+        "available": ["chroma", "faiss"],
+        "default": "chroma",
+        "stats": {
+            name: engine.get_stats()
+            for name, engine in rag_engines.items()
+        },
+    }
 
 @app.post("/api/feedback")
 async def submit_feedback(request: FeedbackRequest):
@@ -163,70 +295,83 @@ async def submit_feedback(request: FeedbackRequest):
         logger.error(f"Error saving feedback: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-def generate_sse_stream(question: str, top_k: int, model_name: str, temperature: float = 0.7):
+def generate_sse_stream(
+    question: str,
+    top_k: int,
+    model_name: str,
+    temperature: float = 0.7,
+    vector_store: str = "chroma",
+    conversation_id: Optional[str] = None,
+    source_filter: Optional[str] = None,
+):
     """Generator for Server-Sent Events streaming response"""
     start_time = time.time()
     
-    # Switch LLM model if needed
-    llm_client.model = model_name
+    # Select vector store engine
+    engine = rag_engines.get(vector_store, rag_engine)
+
+    # Conversation history for multi-turn
+    chat_history = _get_history(conversation_id)
     
     try:
-        # Analyze query for reasoning trace
-        reasoning = rag_engine.analyze_query(question)
+        # Analyze query for reasoning trace (may detect source filter)
+        reasoning = engine.analyze_query(question)
+        effective_filter = source_filter or reasoning.get("source_filter")
         
         # Retrieve relevant context
         retrieval_start = time.time()
-        context_chunks, metadatas = rag_engine.retrieve(question, top_k=top_k)
+        context_chunks, metadatas = engine.retrieve(
+            question,
+            top_k=top_k,
+            source_filter=effective_filter,
+        )
         retrieval_time = time.time() - retrieval_start
         
-        logger.info(f"Retrieved {len(context_chunks)} chunks in {retrieval_time:.2f}s")
+        logger.info(f"Retrieved {len(context_chunks)} chunks in {retrieval_time:.2f}s (backend={vector_store})")
         
         if not context_chunks:
-            # No context found, use LLM directly with streaming
-            generation_start = time.time()
-            llm_thinking = ""
-            for result in llm_client.chat_stream(question, temperature):
-                if result.get('token'):  # Filter empty tokens
-                    yield f"data: {json.dumps({'token': result['token']})}\n\n"
-                if result.get('thinking'):
-                    llm_thinking += result['thinking']
-                    yield f"data: {json.dumps({'thinking': result['thinking']})}\n\n"
-            generation_time = time.time() - generation_start
-            
+            # No context found — return low-confidence message
+            yield f"data: {json.dumps({'token': LOW_CONFIDENCE_MSG})}\n\n"
+            generation_time = 0.0
             total_time = time.time() - start_time
+
+            _append_history(conversation_id, "user", question)
+            _append_history(conversation_id, "assistant", LOW_CONFIDENCE_MSG)
+            _save_chat_message(conversation_id, {"role": "user", "content": question, "timestamp": datetime.now().isoformat()})
+            _save_chat_message(conversation_id, {"role": "assistant", "content": LOW_CONFIDENCE_MSG, "timestamp": datetime.now().isoformat()})
             
-            # Send empty sources
             yield f"data: {json.dumps({'sources': []})}\n\n"
-            
-            # Send metadata
             metadata = {
                 "model": model_name,
                 "retrieval_time": round(retrieval_time, 3),
-                "generation_time": round(generation_time, 3),
+                "generation_time": 0,
                 "total_time": round(total_time, 3),
                 "chunks_used": 0,
                 "timestamp": datetime.now().isoformat()
             }
             yield f"data: {json.dumps({'metadata': metadata})}\n\n"
-            
-            # Send reasoning (include LLM thinking if present)
-            if llm_thinking:
-                reasoning['llm_thinking'] = llm_thinking
             yield f"data: {json.dumps({'reasoning': reasoning})}\n\n"
-            
             yield "data: [DONE]\n\n"
             return
         
-        # Stream answer generation with context
+        # Stream answer generation with context + history
         generation_start = time.time()
         llm_thinking = ""
-        for result in llm_client.generate_answer_stream(question, context_chunks, temperature):
-            if result.get('token'):  # Filter empty tokens
+        full_answer = ""
+        for result in llm_client.generate_answer_stream(question, context_chunks, temperature, chat_history, model=model_name):
+            if result.get('token'):
+                full_answer += result['token']
                 yield f"data: {json.dumps({'token': result['token']})}\n\n"
             if result.get('thinking'):
                 llm_thinking += result['thinking']
                 yield f"data: {json.dumps({'thinking': result['thinking']})}\n\n"
         generation_time = time.time() - generation_start
+
+        # Persist conversation turn
+        _append_history(conversation_id, "user", question)
+        _append_history(conversation_id, "assistant", full_answer)
+        _save_chat_message(conversation_id, {"role": "user", "content": question, "timestamp": datetime.now().isoformat()})
+        _save_chat_message(conversation_id, {"role": "assistant", "content": full_answer, "timestamp": datetime.now().isoformat()})
         
         total_time = time.time() - start_time
         
@@ -245,7 +390,10 @@ def generate_sse_stream(question: str, top_k: int, model_name: str, temperature:
                 "file_path": file_path,
                 "char_count": metadata.get('char_count', len(chunk)),
                 "token_count": metadata.get('token_count', len(chunk) // 4),
-                "confidence": metadata.get('confidence', 0.5)
+                "confidence": metadata.get('confidence', 0.5),
+                "rerank_score": metadata.get('rerank_score', 0.0),
+                "cosine_similarity": metadata.get('cosine_similarity', 0.0),
+                "euclidean_distance": metadata.get('euclidean_distance', 0.0)
             })
         
         # Send sources
@@ -277,10 +425,20 @@ def generate_sse_stream(question: str, top_k: int, model_name: str, temperature:
 @app.post("/api/chat")
 async def chat(request: ChatRequest):
     """
-    Answer questions using RAG with optional streaming
+    Answer questions using RAG with optional streaming.
+    Supports multi-turn conversations, guardrails, source filtering.
     """
     start_time = time.time()
     logger.info(f"Received question: {request.question}, stream={request.stream}, model={request.model}")
+
+    # ── Guardrails: sanitise input ──
+    cleaned_question, is_safe = sanitize_input(request.question)
+    if not is_safe:
+        logger.warning(f"Prompt injection detected: {request.question[:100]}")
+        raise HTTPException(
+            status_code=400,
+            detail="Your message was flagged as a potential prompt injection and has been rejected."
+        )
     
     # Get model name from mapping
     model_name = MODEL_MAPPING.get(request.model, "qwen3:1.7b")
@@ -288,7 +446,13 @@ async def chat(request: ChatRequest):
     # Handle streaming request
     if request.stream:
         return StreamingResponse(
-            generate_sse_stream(request.question, request.top_k, model_name, request.temperature),
+            generate_sse_stream(
+                cleaned_question, request.top_k, model_name,
+                request.temperature,
+                request.vector_store or "chroma",
+                request.conversation_id,
+                request.source_filter,
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -299,50 +463,65 @@ async def chat(request: ChatRequest):
     
     # Non-streaming response
     try:
-        # Switch LLM model if needed
-        llm_client.model = model_name
+        
+        # Select vector store engine
+        engine = rag_engines.get(request.vector_store or "chroma", rag_engine)
         
         # Analyze query for reasoning trace
-        reasoning = rag_engine.analyze_query(request.question)
+        reasoning = engine.analyze_query(cleaned_question)
+        effective_filter = request.source_filter or reasoning.get("source_filter")
+
+        # Conversation history
+        chat_history = _get_history(request.conversation_id)
         
         # Retrieve relevant context
         retrieval_start = time.time()
-        context_chunks, metadatas = rag_engine.retrieve(request.question, top_k=request.top_k)
+        context_chunks, metadatas = engine.retrieve(
+            cleaned_question,
+            top_k=request.top_k,
+            source_filter=effective_filter,
+        )
         retrieval_time = time.time() - retrieval_start
         
-        logger.info(f"Retrieved {len(context_chunks)} chunks in {retrieval_time:.2f}s")
+        logger.info(f"Retrieved {len(context_chunks)} chunks in {retrieval_time:.2f}s (backend={request.vector_store})")
         
         if not context_chunks:
-            # No context found, use LLM directly
-            logger.warning("No relevant context found, using LLM without RAG")
-            generation_start = time.time()
-            answer = llm_client.chat(request.question, request.temperature)
-            generation_time = time.time() - generation_start
-            
+            # No confident context — abstain
+            logger.warning("No relevant context found above confidence threshold")
             total_time = time.time() - start_time
-            logger.info(f"Response generated in {generation_time:.2f}s (total: {total_time:.2f}s)")
-            
+
+            _append_history(request.conversation_id, "user", cleaned_question)
+            _append_history(request.conversation_id, "assistant", LOW_CONFIDENCE_MSG)
+
             return ChatResponse(
-                answer=answer,
+                answer=LOW_CONFIDENCE_MSG,
                 sources=[],
                 metadata={
                     "model": model_name,
                     "retrieval_time": round(retrieval_time, 3),
-                    "generation_time": round(generation_time, 3),
+                    "generation_time": 0,
                     "total_time": round(total_time, 3),
                     "chunks_used": 0,
                     "timestamp": datetime.now().isoformat()
                 },
-                reasoning=ReasoningTrace(**reasoning, llm_thinking=llm_client.last_thinking)
+                reasoning=ReasoningTrace(**reasoning)
             )
         
-        # Generate answer with context
+        # Generate answer with context + history
         generation_start = time.time()
-        answer, _thinking = llm_client.generate_answer(request.question, context_chunks, request.temperature)
+        answer, _thinking = llm_client.generate_answer(
+            cleaned_question, context_chunks, request.temperature, chat_history, model=model_name
+        )
         generation_time = time.time() - generation_start
         
         total_time = time.time() - start_time
         logger.info(f"Answer generated in {generation_time:.2f}s (total: {total_time:.2f}s)")
+
+        # Persist history (both in-memory and on-disk)
+        _append_history(request.conversation_id, "user", cleaned_question)
+        _append_history(request.conversation_id, "assistant", answer)
+        _save_chat_message(request.conversation_id, {"role": "user", "content": cleaned_question, "timestamp": datetime.now().isoformat()})
+        _save_chat_message(request.conversation_id, {"role": "assistant", "content": answer, "timestamp": datetime.now().isoformat()})
         
         # Format sources with metadata and confidence
         sources = []
@@ -361,7 +540,10 @@ async def chat(request: ChatRequest):
                 char_count=metadata.get('char_count', len(chunk)),
                 token_count=metadata.get('token_count', len(chunk) // 4),
                 char_count_raw=metadata.get('char_count_raw', len(chunk)),
-                confidence=metadata.get('confidence', 0.5)
+                confidence=metadata.get('confidence', 0.5),
+                rerank_score=metadata.get('rerank_score', 0.0),
+                cosine_similarity=metadata.get('cosine_similarity', 0.0),
+                euclidean_distance=metadata.get('euclidean_distance', 0.0)
             ))
         
         return ChatResponse(
@@ -387,6 +569,73 @@ async def serve_pdf(filename: str):
     """Legacy PDF endpoint — redirects to the generic documents endpoint."""
     from fastapi.responses import RedirectResponse
     return RedirectResponse(url=f"/api/documents/{filename}")
+
+# ── Document management endpoints ──
+
+@app.get("/api/documents")
+async def list_documents(vector_store: str = "chroma"):
+    """List all documents stored in the vector store."""
+    engine = rag_engines.get(vector_store, rag_engine)
+    docs = engine.list_documents()
+    return {"documents": docs, "vector_store": vector_store}
+
+@app.delete("/api/documents/{filename}")
+async def delete_document_endpoint(filename: str, vector_store: str = "chroma"):
+    """Delete a document and all its chunks from the vector store."""
+    safe_name = Path(filename).name
+    engine = rag_engines.get(vector_store, rag_engine)
+    result = engine.delete_document(safe_name)
+
+    # Also delete from the other backend
+    other = "faiss" if vector_store == "chroma" else "chroma"
+    other_engine = rag_engines.get(other)
+    if other_engine:
+        other_engine.delete_document(safe_name)
+
+    # Optionally remove file from uploads
+    file_path = UPLOAD_DIR / safe_name
+    if file_path.exists():
+        os.remove(file_path)
+
+    return {"status": "success", "message": result}
+
+# ── Chat history persistence endpoints ──
+
+@app.get("/api/chat/history/{conversation_id}")
+async def get_chat_history(conversation_id: str):
+    """Return persisted chat history for a conversation."""
+    history = _load_chat_history(conversation_id)
+    return {"conversation_id": conversation_id, "messages": history}
+
+@app.delete("/api/chat/history/{conversation_id}")
+async def clear_chat_history(conversation_id: str):
+    """Clear persisted chat history for a conversation."""
+    history_file = CHAT_HISTORY_DIR / f"{conversation_id}.json"
+    if history_file.exists():
+        os.remove(history_file)
+    if conversation_id in _conversations:
+        del _conversations[conversation_id]
+    return {"status": "success", "message": f"History for {conversation_id} cleared"}
+
+@app.get("/api/chat/conversations")
+async def list_conversations():
+    """List all persisted conversation IDs."""
+    os.makedirs(CHAT_HISTORY_DIR, exist_ok=True)
+    files = sorted(CHAT_HISTORY_DIR.glob("*.json"), key=os.path.getmtime, reverse=True)
+    convos = []
+    for f in files:
+        cid = f.stem
+        try:
+            with open(f, "r") as fh:
+                msgs = json.load(fh)
+            convos.append({
+                "conversation_id": cid,
+                "message_count": len(msgs),
+                "last_message": msgs[-1].get("content", "")[:80] if msgs else "",
+            })
+        except Exception:
+            convos.append({"conversation_id": cid, "message_count": 0, "last_message": ""})
+    return {"conversations": convos}
 
 @app.get("/api/documents/{filename}")
 async def get_document(filename: str):
@@ -449,6 +698,12 @@ async def upload_document(file: UploadFile = File(...)):
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         
         file_path = UPLOAD_DIR / safe_name
+        
+        # Delete old chunks if re-uploading (prevents duplicates)
+        rag_engine_chroma.delete_document(safe_name)
+        if rag_engine_faiss is not None:
+            rag_engine_faiss.delete_document(safe_name)
+        
         file_size = 0
         
         with open(file_path, "wb") as buffer:
@@ -458,10 +713,15 @@ async def upload_document(file: UploadFile = File(...)):
         
         logger.info(f"File saved to: {file_path}")
         
-        # Ingest the document
+        # Ingest the document into available backends
         ingest_start = time.time()
-        result = rag_engine.ingest_file(file_path)
+        result_chroma = rag_engine_chroma.ingest_file(file_path)
+        if rag_engine_faiss is not None:
+            rag_engine_faiss.ingest_file(file_path)
         ingest_time = time.time() - ingest_start
+        
+        # Use the chroma result as the primary message
+        result = result_chroma
         
         total_time = time.time() - start_time
         logger.info(f"Document ingested in {ingest_time:.2f}s (total: {total_time:.2f}s)")

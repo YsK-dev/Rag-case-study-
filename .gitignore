@@ -33,6 +33,8 @@ db/
 *.db
 chroma_db/
 chroma_db_web/
+faiss_db/
+
 
 # Logs and temporary files
 *.log
