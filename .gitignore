@@ -40,3 +40,4 @@ faiss_db/
 *.log
 .cache/
 data/
+config/

@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, conint, confloat
-from starlette.concurrency import run_in_threadpool
 import logging
 import time
 import json
@@ -22,9 +21,8 @@ from typing import Optional, List, Dict
 TESTING = os.getenv("RAG_TESTING") == "1"
 
 if not TESTING:
-from rag_engine import RAGEngine
-from llm_client import OllamaClient, sanitize_input
-from judge import judge_with_groq, JudgeError, DEFAULT_GROQ_MODEL
+    from rag_engine import RAGEngine
+    from llm_client import OllamaClient, sanitize_input
 else:
     # Import only sanitize_input for tests (lightweight)
     from llm_client import sanitize_input
@@ -139,20 +137,6 @@ class FeedbackRequest(BaseModel):
 
 class DeleteDocumentRequest(BaseModel):
     source: str  # filename to delete
-
-class JudgeRequest(BaseModel):
-    question: str
-    answer: str
-    sources: Optional[List[SourceChunk]] = None
-    criteria: Optional[str] = None
-    model: Optional[str] = None
-
-class JudgeResponse(BaseModel):
-    score: float
-    verdict: str
-    feedback: List[str]
-    rationale: Optional[str] = None
-    model: Optional[str] = None
 
 class ReasoningTrace(BaseModel):
     query_rewrite: str = ""
