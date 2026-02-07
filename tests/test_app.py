@@ -20,7 +20,7 @@ os.environ["RAG_TESTING"] = "1"
 import pytest
 import httpx
 
-import app as app_module
+import main as app_module
 
 
 # =============================================================================

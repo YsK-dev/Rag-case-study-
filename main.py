@@ -68,12 +68,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Model mapping - frontend model names to Ollama models
+# Model registry – each entry describes an Ollama model available to the frontend
+MODEL_REGISTRY = {
+    "qwen3-1.7b": {
+        "ollama_name": "qwen3:1.7b",
+        "label": "Qwen3 1.7B",
+        "tier": "fast",          # ⚡ Fast
+        "description": "Qwen3 1.7 B – lightweight, low latency",
+        "params": "1.7B",
+    },
+    "qwen3-4b-thinking": {
+        "ollama_name": "pielee/qwen3-4b-thinking-2507_q8:latest",
+        "label": "Qwen3 4B Thinking",
+        "tier": "smart",         # 🧠 Smart
+        "description": "Qwen3 4 B (thinking mode) – deeper reasoning, chain-of-thought",
+        "params": "4B",
+    },
+}
+
+# Backward-compat aliases so old frontend keys still resolve
 MODEL_MAPPING = {
-    "gemini-1.5-flash": "qwen3:1.7b",     # Fast model (smaller, quicker)
-    "gemini-1.5-pro": "pielee/qwen3-4b-thinking-2507_q8:latest",  # Smart model (larger, better reasoning)
-    "flash": "qwen3:1.7b",
-    "pro": "pielee/qwen3-4b-thinking-2507_q8:latest"
+    # new keys (used by updated frontend)
+    "qwen3-1.7b":          MODEL_REGISTRY["qwen3-1.7b"]["ollama_name"],
+    "qwen3-4b-thinking":   MODEL_REGISTRY["qwen3-4b-thinking"]["ollama_name"],
+    # legacy keys (keep so older clients don't break)
+    "gemini-1.5-flash":    MODEL_REGISTRY["qwen3-1.7b"]["ollama_name"],
+    "gemini-1.5-pro":      MODEL_REGISTRY["qwen3-4b-thinking"]["ollama_name"],
+    "flash":               MODEL_REGISTRY["qwen3-1.7b"]["ollama_name"],
+    "pro":                 MODEL_REGISTRY["qwen3-4b-thinking"]["ollama_name"],
 }
 
 # Initialize RAG components
@@ -290,6 +312,23 @@ async def vector_stores():
             name: engine.get_stats()
             for name, engine in rag_engines.items()
         },
+    }
+
+@app.get("/api/models")
+async def list_models():
+    """Return available LLM models with their metadata."""
+    models = []
+    for key, info in MODEL_REGISTRY.items():
+        models.append({
+            "id": key,
+            "label": info["label"],
+            "tier": info["tier"],
+            "description": info["description"],
+            "params": info["params"],
+        })
+    return {
+        "models": models,
+        "default": "qwen3-1.7b",
     }
 
 @app.post("/api/feedback")
