@@ -13,7 +13,9 @@ A **privacy-first, fully local** Retrieval-Augmented Generation (RAG) system tha
 
 Transform your document collection into an interactive knowledge base:
 
-![alt text](image-3.png)
+### Architecture
+
+![alt text](docs/image6.png)
 
 **Key Features:**
 - 🔒 **100% Local**: No data leaves your machine
@@ -22,6 +24,9 @@ Transform your document collection into an interactive knowledge base:
 - 💬 **Streaming Chat**: Real-time responses with source citations
 - 🎨 **Modern UI**: React/Next.js with dark mode
 - 🧪 **Evaluated**: LLM-as-Judge scoring (avg 7.2/10)
+
+
+
 
 ---
 
@@ -184,28 +189,7 @@ curl -X POST http://localhost:8000/api/chat \
 
 ---
 
-## 🏗️ Project Structure
 
-```
-Rag-case-study/
-├── app.py                 # FastAPI server (API layer)
-├── requirements.txt       # Python dependencies
-├── src/
-│   ├── rag_engine.py      # Vector DB + retrieval logic
-│   └── llm_client.py      # Ollama integration + guardrails
-├── frontedRag/rag-app/    # Next.js frontend
-│   ├── package.json       # Node.js dependencies
-│   ├── app/               # Next.js app router
-│   └── components/        # React components
-├── data/
-│   ├── uploads/           # Uploaded documents
-│   └── eval_cases.json    # Evaluation test cases
-├── tests/
-│   ├── test_app.py        # Unit tests (24 tests)
-│   └── eval_judge.py      # LLM-as-Judge evaluation
-├── chroma_db/             # ChromaDB vector store
-└── docs/                  # Detailed documentation
-```
 
 **Tech Stack:**
 - **Backend**: FastAPI, Uvicorn, Pydantic
@@ -290,40 +274,10 @@ Detailed documentation is available in [`docs/`](docs/):
 
 ---
 
-## 📈 Development Timeline
-
-| Date | Milestone |
-|------|-----------|
-| Feb 4 | Initial RAG engine + CLI demo |
-| Feb 5 | PDF preview endpoint |
-| Feb 6 | Frontend: React + Next.js |
-| Feb 7 | Inline citations, reranker, bug fixes |
-| Feb 8 | Unit tests + LLM-as-Judge evaluation |
-
----
-
-## 🐛 Troubleshooting
-
-| Issue | Solution |
-|-------|----------|
-| `ollama: command not found` | Install Ollama: `brew install ollama` |
-| `Connection refused :11434` | Start Ollama: `ollama serve` |
-| `Model not found` | Pull model: `ollama pull qwen3:1.7b` |
-| `CUDA out of memory` | Use smaller model or CPU mode |
-| Frontend build fails | Ensure Node.js 18+: `node --version` |
-
----
-
 ## 📄 License
 
 MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run tests: `RAG_TESTING=1 pytest tests/`
-5. Submit a pull request
