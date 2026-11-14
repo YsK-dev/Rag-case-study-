@@ -1,283 +1,110 @@
-# RAG Case Study - Local Document Q&A System
+# Local document Q&A (RAG)
 
-A **privacy-first, fully local** Retrieval-Augmented Generation (RAG) system that enables intelligent Q&A over your documents using Ollama and ChromaDB.
+Ask questions about your own documents and get answers with their sources. Everything runs on
+your own machine: the documents, the search index and the language model (through Ollama).
 
-![Python](https://img.shields.io/badge/Python-3.10+-blue)
-![FastAPI](https://img.shields.io/badge/FastAPI-0.100+-green)
-![Next.js](https://img.shields.io/badge/Next.js-16+-black)
-![License](https://img.shields.io/badge/License-MIT-yellow)
+This repository holds the back end, a FastAPI service. You can use it from the built-in API page
+(`/docs`) or from any front end. The web front end shown in the design notes is not part of this
+repository.
 
----
+## What it does
 
-## What This Project Does
+- **Reads many file types:** PDF (with tables), Word, Excel, CSV, PowerPoint, HTML, Markdown and
+  plain text.
+- **Splits documents into passages:** text is cut into pieces of about 500 characters with 100
+  characters of overlap, and small neighbouring pieces are joined up to 1,000 characters. Tables,
+  code and formulas are kept whole. A passage that repeats, such as a page header, is kept at
+  most twice.
+- **Finds the right passages in two steps:**
+  1. Candidates come from two searches: by meaning (vector search with `all-MiniLM-L6-v2` in
+     ChromaDB, or FAISS) and by keywords (BM25).
+  2. A cross-encoder (`ms-marco-MiniLM-L-6-v2`) reads each question–passage pair and puts the
+     candidates in order. Passages it is not confident about (below 0.3) are dropped. If nothing
+     is left, the app says it cannot answer instead of guessing.
+- **Answers with a local model:** Qwen3 1.7B (fast) or Qwen3 4B Thinking, through Ollama. The
+  answer streams word by word and lists the passages it used.
+- **Basic safety checks:** common prompt-injection phrases in questions are rejected.
+- **Conversations:** follow-up questions see the last 20 messages of the conversation.
 
-Transform your document collection into an interactive knowledge base:
+## Run it
 
-### Architecture
-
-![alt text](docs/image6.png)
-
-**Key Features:**
-- 🔒 **100% Local**: No data leaves your machine
-- 📄 **Multi-format**: PDF, DOCX, TXT, XLSX, CSV, PPTX, HTML, Markdown
-- 🔍 **Hybrid Search**: Semantic + BM25 for best results
-- 💬 **Streaming Chat**: Real-time responses with source citations
-- 🎨 **Modern UI**: React/Next.js with dark mode
-- 🧪 **Evaluated**: LLM-as-Judge scoring (avg 7.2/10)
-
-
-
-
----
-
-## 🚀 Installation & Setup
-
-### Prerequisites
-
-| Requirement | Version | Notes |
-|-------------|---------|-------|
-| Python | 3.10+ | Required |
-| Node.js | 18+ | For frontend |
-| Ollama | Latest | [Download here](https://ollama.ai/) |
-
-### Step 1: Clone the Repository
+You need Python 3.10 or newer and [Ollama](https://ollama.com/).
 
 ```bash
-git clone https://github.com/YsK-dev/Rag-case-study-.git 
-cd Rag-case-study
-```
+git clone https://github.com/YsK-dev/Rag-case-study-.git
+cd Rag-case-study-
 
-### Step 2: Install Ollama Models
+# Language models
+ollama serve                                      # leave running in its own terminal
+ollama pull qwen3:1.7b
+ollama pull pielee/qwen3-4b-thinking-2507_q8
 
-```bash
-# Install Ollama (macOS)
-brew install ollama
-# On Winows
-winget install Ollama.Ollama
-# Linux (Ubuntu / Debian / Arch / Fedora etc.)
-curl -fsSL https://ollama.com/install.sh | sh
-
-
-# Start Ollama service
-ollama serve
-
-# Pull required models (in another terminal)
-ollama pull qwen3:1.7b                           # Fast model (⚡ 1.7B params)
-ollama pull pielee/qwen3-4b-thinking-2507_q8     # Smart model (🧠 4B params, reasoning)
-```
-
-**Available Models:**
-
-| Model ID | Label | Tier | Parameters | Best For |
-|----------|-------|------|------------|----------|
-| `qwen3-1.7b` | Qwen3 1.7B | ⚡ Fast | 1.7B | Quick responses, low latency |
-| `qwen3-4b-thinking` | Qwen3 4B Thinking | 🧠 Smart | 4B | Complex reasoning, chain-of-thought |
-
-### Step 3: Setup Backend (Python)
-
-```bash
-# Create virtual environment (recommended)
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install Python dependencies
+# Back end
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
+uvicorn main:app --reload                         # http://localhost:8000, API page at /docs
 ```
 
-**Backend Dependencies (`requirements.txt`):**
-```
-fastapi          # Web framework
-uvicorn          # ASGI server
-chromadb         # Vector database
-sentence-transformers  # Embedding model
-pypdf            # PDF parsing
-pymupdf          # PDF rendering
-python-docx      # DOCX support
-openpyxl         # Excel support
-python-pptx      # PowerPoint support
-beautifulsoup4   # HTML parsing
-rank-bm25        # BM25 scoring
-ollama           # LLM client
-pytest           # Testing
-```
-
-### Step 4: Setup Frontend (Next.js)
+Try it:
 
 ```bash
-cd frontedRag/rag-app
+curl -F "file=@my_notes.pdf" http://localhost:8000/api/upload
 
-# Install Node.js dependencies
-npm install
-```
-
-**Frontend Dependencies (`package.json`):**
-```
-next             # React framework (v16)
-react            # UI library (v19)
-tailwindcss      # Styling (v4)
-framer-motion    # Animations
-lucide-react     # Icons
-react-pdf        # PDF preview
-```
-
----
-
-## 🏃 Running the Application
-
-### Terminal 1: Start Ollama
-```bash
-ollama serve
-# Runs on http://localhost:11434
-```
-
-### Terminal 2: Start Backend
-```bash
-uvicorn main:app --reload
-
-# Runs on http://localhost:8000
-```
-
-### Terminal 3: Start Frontend
-```bash
-cd frontedRag/rag-app
-npm run dev
-# Runs on http://localhost:3000
-```
-
-### Verify Everything Works
-```bash
-# Check backend health
-curl http://localhost:8000/api/health
-
-# Check available models
-curl http://localhost:8000/api/models
-```
-
----
-
-## 📖 Usage
-
-### Web Interface
-1. Open `http://localhost:3000` in your browser
-2. **Upload documents** via drag-and-drop
-3. **Select model** (Fast ⚡ or Smart 🧠)
-4. **Ask questions** in natural language
-5. **View answers** with source citations
-
-### API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/chat` | POST | Ask questions (supports streaming) |
-| `/api/upload` | POST | Upload documents |
-| `/api/documents` | GET | List indexed documents |
-| `/api/documents/{file}` | DELETE | Remove document |
-| `/api/models` | GET | List available LLM models |
-| `/api/health` | GET | Health check |
-
-### Example API Request
-```bash
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
-  -d '{
-    "question": "What is RAG?",
-    "model": "qwen3-1.7b",
-    "stream": true,
-    "top_k": 5
-  }'
+  -d '{"question": "What does the report say about costs?", "model": "qwen3-1.7b", "top_k": 3}'
 ```
 
----
+## API
 
+| Endpoint | Method | What it does |
+|---|---|---|
+| `/api/upload` | POST | Add a document |
+| `/api/documents` | GET | List documents |
+| `/api/documents/{filename}` | GET, DELETE | Download or remove one document |
+| `/api/documents/{filename}/preview` | GET | Text of a non-PDF document, for a preview |
+| `/api/chat` | POST | Ask a question (`"stream": true` for streaming) |
+| `/api/chat/conversations` | GET | List conversations |
+| `/api/chat/history/{conversation_id}` | GET, DELETE | Show or clear one conversation |
+| `/api/feedback` | POST | Thumbs up or down for an answer |
+| `/api/models` | GET | Available models |
+| `/api/vector-stores` | GET | Available search back ends (ChromaDB, FAISS) |
+| `/api/health` | GET | Health check |
 
+## Tests
 
-**Tech Stack:**
-- **Backend**: FastAPI, Uvicorn, Pydantic
-- **Vector Store**: ChromaDB (default), FAISS (optional)
-- **Embeddings**: sentence-transformers (all-MiniLM-L6-v2)
-- **LLM**: Ollama with qwen3 models
-- **Frontend**: Next.js 16, React 19, TailwindCSS 4
+The unit tests check every endpoint in a light test mode that does not load any model, so they
+run in about a second.
 
----
-
-## 🧪 Testing & Evaluation
-
-### Unit Tests
 ```bash
-RAG_TESTING=1 pytest tests/test_app.py -v
-# 24 tests covering all endpoints
+pip install -r requirements-dev.txt
+RAG_TESTING=1 python -m pytest
 ```
 
-### LLM-as-Judge Evaluation
+## Scoring answers with judge models
+
+`tests/eval_judge.py` sends your questions to the running API and asks larger models on Groq to
+score each answer from 0 to 10 for faithfulness to the sources, relevance and completeness. You
+supply the question file; the API key is read from the `GROQ_API_KEY` environment variable.
+
 ```bash
-# Set Groq API key (get free at console.groq.com)
-export GROQ_API_KEY=gsk_...
-
-# Run evaluation
-python tests/eval_judge.py --input data/eval_cases.json --output data/eval_results.jsonl
+python tests/eval_judge.py --input my_questions.json --output judge_results.jsonl
 ```
 
-**Latest Evaluation Results:**
-| Metric | Score |
-|--------|-------|
-| Overall | 7.19/10 |
-| qwen3-32b judge | 7.98/10 |
-| gpt-oss-120b judge | 7.14/10 |
+## Settings
 
----
+| Setting | Where | Default |
+|---|---|---|
+| Models | `MODEL_REGISTRY` in `main.py` | `qwen3-1.7b`, `qwen3-4b-thinking` |
+| Embedding model | `src/rag_engine.py` | `all-MiniLM-L6-v2` |
+| Reranker | `src/rag_engine.py` | `cross-encoder/ms-marco-MiniLM-L-6-v2` |
+| Passage size | `src/rag_engine.py` | about 500 characters, 100 overlap, joined up to 1,000 |
+| Confidence cut-off | `retrieve()` in `src/rag_engine.py` | 0.3 |
+| Passages per answer | `top_k` in the chat request | 3 |
 
-## ⚙️ Configuration
+To add an Ollama model, pull it and add an entry to `MODEL_REGISTRY` in `main.py`.
 
-| Setting | Location | Default |
-|---------|----------|---------|
-| LLM Models | `app.py` → `MODEL_REGISTRY` | qwen3-1.7b, qwen3-4b-thinking |
-| Embedding Model | `rag_engine.py` | all-MiniLM-L6-v2 |
-| Chunk Size | `rag_engine.py` | 500 tokens |
-| Chunk Overlap | `rag_engine.py` | 100 tokens |
-| Backend Port | `app.py` | 8000 |
-| Frontend Port | `next.config.js` | 3000 |
+## Design notes
 
-### Adding New Ollama Models
-
-1. Pull the model:
-   ```bash
-   ollama pull <model-name>
-   ```
-
-2. Add to `MODEL_REGISTRY` in `app.py`:
-   ```python
-   MODEL_REGISTRY = {
-       "new-model": {
-           "ollama_name": "<model-name>",
-           "label": "Display Name",
-           "tier": "fast",  # or "smart"
-           "description": "Model description",
-           "params": "7B",
-       },
-   }
-   ```
-
----
-
-## 📚 Documentation
-
-Detailed documentation is available in [`docs/`](docs/):
-
-| Document | Topic |
-|----------|-------|
-| [01_problem_definition.md](docs/01_problem_definition.md) | User needs & solution overview |
-| [02_llm_layer.md](docs/02_llm_layer.md) | LLM integration & guardrails |
-| [03_vector_layer.md](docs/03_vector_layer.md) | Chunking, embeddings, hybrid search |
-| [04_api_layer.md](docs/04_api_layer.md) | API design & endpoints |
-| [05_architecture.md](docs/05_architecture.md) | System architecture diagrams |
-| [06_literature_review.md](docs/06_literature_review.md) | Technology comparisons |
-
----
-
-## 📄 License
-
-MIT License - see [LICENSE](LICENSE) for details.
-
----
-
-
+The [`docs/`](docs/) folder has the design notes written during the project: the problem, the
+model layer, the search layer, the API, the architecture and a comparison of the tools considered.
