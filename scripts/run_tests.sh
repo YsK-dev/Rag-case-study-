@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
+# Run the unit tests in the light test mode (no models are loaded).
 set -euo pipefail
-
-# Lightweight test mode to avoid heavy model initialization
+cd "$(dirname "$0")/.."
 export RAG_TESTING=1
-
-pytest '/Users/ysk/Desktop/Rag(case-study)/tests/test_app.py' -v
+python -m pytest -v "$@"
