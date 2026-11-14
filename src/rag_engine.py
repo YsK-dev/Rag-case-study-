@@ -35,6 +35,15 @@ except ImportError:
     BM25_AVAILABLE = False
 
 
+def bm25_tokens(text: str) -> List[str]:
+    """Lower-case words for BM25, without punctuation, so that "cancer." matches "cancer".
+
+    Splitting on spaces alone kept punctuation on words; on the SciFact benchmark this
+    tokenizer raised BM25 nDCG@10 from 0.560 to 0.652 (see evaluation/).
+    """
+    return re.findall(r"\w+", text.lower())
+
+
 class RAGEngine:
     """Enhanced RAG Engine with PDF processing and two-stage retrieval."""
 
@@ -1192,9 +1201,7 @@ class RAGEngine:
                 metas = all_data.get("metadatas", []) or [{}] * len(corpus)
                 if not corpus:
                     return [], []
-                tokenized_corpus = [
-                    doc.lower().split() for doc in corpus
-                ]
+                tokenized_corpus = [bm25_tokens(doc) for doc in corpus]
                 bm25 = BM25Okapi(tokenized_corpus)
                 # Store in cache
                 self._bm25_cache = {
@@ -1215,9 +1222,7 @@ class RAGEngine:
             ):
                 bm25 = self._bm25_cache["bm25"]
             else:
-                tokenized_corpus = [
-                    doc.lower().split() for doc in corpus
-                ]
+                tokenized_corpus = [bm25_tokens(doc) for doc in corpus]
                 bm25 = BM25Okapi(tokenized_corpus)
                 self._bm25_cache = {
                     "corpus_size": corpus_size,
@@ -1226,7 +1231,7 @@ class RAGEngine:
                     "bm25": bm25,
                 }
 
-        query_tokens = query.lower().split()
+        query_tokens = bm25_tokens(query)
         scores = bm25.get_scores(query_tokens)
 
         top_indices = np.argsort(scores)[::-1][:top_n]
