@@ -26,6 +26,57 @@ repository.
 - **Basic safety checks:** common prompt-injection phrases in questions are rejected.
 - **Conversations:** follow-up questions see the last 20 messages of the conversation.
 
+## How well the search works
+
+Measured on [SciFact](https://huggingface.co/datasets/BeIR/scifact), a public benchmark from
+BEIR: 5,183 scientific abstracts and 300 test questions, each with the abstracts that answer it.
+Every abstract is stored as one passage in the app's own search engine (`src/rag_engine.py`);
+reading files and splitting them is not part of this test. Laptop CPU (Apple M1), no GPU.
+
+| Search set-up | nDCG@10 | Recall@10 | Hit@3 | Time per question |
+|---|---|---|---|---|
+| Vector search only | 0.645 | 78.3% | 68.3% | 10 ms |
+| BM25 keyword search only | 0.652 | 77.4% | 69.3% | 10 ms |
+| Vector search, then reranker | 0.691 | 81.0% | 71.0% | 1.2 s |
+| **Vector + BM25, then reranker (what the app does)** | **0.696** | **83.1%** | **72.3%** | **1.9 s** |
+
+- **nDCG@10** is the usual score for this benchmark: 1.0 means the right abstracts are at the
+  top of the first 10 results, 0 means none of them is there. **Recall@10** is the share of
+  right abstracts found in the first 10. **Hit@3** is the share of questions with a right
+  abstract in the first 3, the number the app passes to the language model by default.
+  Time is the median per question.
+- **The reranker is what helps.** It lifts nDCG@10 by 0.05 over vector search alone (95%
+  interval +0.02 to +0.08, paired over the 300 questions), at about 1.2 s per question on this CPU.
+- **BM25 adds little on top of the reranker here:** +0.006 nDCG@10 (95% interval −0.009 to
+  +0.022), for about 0.6 s more per question. It may matter more for documents full of names,
+  codes or numbers; SciFact does not test that.
+- **A fix found by this test.** BM25 used to split text on spaces only, so "cancer." and
+  "cancer" were different words. Splitting into words raised BM25 alone from 0.560 to 0.652
+  (95% interval +0.07 to +0.12). The full pipeline barely moved (0.694 to 0.696).
+
+**The app's default call** keeps at most 3 passages and drops passages with a reranker confidence
+below 0.3; when nothing is left, the app says it cannot answer.
+
+| Default call | Hit@3 | Questions with no passage |
+|---|---|---|
+| With the 0.3 cut-off (as the app runs) | 67.0% | 12.0% (36 of 300) |
+| Without the cut-off | 72.7% | 0% |
+
+For 26 of those 36 questions, the passages that were dropped were all wrong, so the app was
+right not to answer from them. For the other 10, a right passage was dropped. Every SciFact
+question has an answer in the abstracts, so this test shows what the cut-off costs, not how often
+it saves the app from answering a question the documents cannot answer.
+
+Reproduce (downloads the pinned benchmark and models, about 25 minutes on a laptop CPU):
+
+```bash
+pip install -r requirements.txt
+python -m evaluation.retrieval_eval --dataset scifact
+```
+
+Results: `evaluation/results.json`, one row per question and set-up:
+`evaluation/per_question_scifact.csv`.
+
 ## Run it
 
 You need Python 3.10 or newer and [Ollama](https://ollama.com/).
@@ -74,7 +125,8 @@ curl -X POST http://localhost:8000/api/chat \
 ## Tests
 
 The unit tests check every endpoint in a light test mode that does not load any model, so they
-run in about a second.
+run in about a second. The tests of the search metrics run there too; the BM25 word test runs
+when the full requirements are installed.
 
 ```bash
 pip install -r requirements-dev.txt
