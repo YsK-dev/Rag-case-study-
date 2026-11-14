@@ -1,0 +1,19 @@
+{
+  "fiqa": {
+    "dataset": "fiqa",
+    "documents": 57600,
+    "test_questions": 648,
+    "tokenizers": {
+      "split_on_spaces": {
+        "ndcg@10": 0.1591,
+        "recall@10": 0.2037,
+        "hit@3": 0.2299
+      },
+      "words": {
+        "ndcg@10": 0.2167,
+        "recall@10": 0.278,
+        "hit@3": 0.3086
+      }
+    }
+  }
+}

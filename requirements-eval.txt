@@ -1,0 +1,4 @@
+# For the search measurement in evaluation/ (on top of the app's own requirements).
+-r requirements.txt
+pandas
+pyarrow
