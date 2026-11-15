@@ -103,7 +103,8 @@ def main() -> None:
                                      "ms_per_claim_median": round(statistics.median(ms), 1)}
             print(name, result["train"][name], f"{time.time() - t_start:.0f} s", flush=True)
 
-        # The app's reranker here must give the same results as in cutoff_tuning.
+        # The app's reranker here must find the same right abstracts as in cutoff_tuning
+        # (same call, same index). Only the hits are compared, not the confidences.
         stored = {r["query_id"]: any(r["relevant"]) for r in current_rows
                   if r["split"] == "train" and r["index"] == "answerable"}
         assert all(stored[q] == bool(h) for q, h in zip(train_q, train_hits[CURRENT])), "results differ"

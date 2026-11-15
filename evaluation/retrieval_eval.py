@@ -35,12 +35,12 @@ from pathlib import Path
 
 import pandas as pd
 from huggingface_hub import hf_hub_download
-from sentence_transformers import CrossEncoder, SentenceTransformer
+from sentence_transformers import SentenceTransformer
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from rag_engine import EMBEDDERS, RERANKER, RAGEngine  # noqa: E402
+from rag_engine import EMBEDDERS, RERANKER, RAGEngine, load_reranker  # noqa: E402
 
 from evaluation.metrics import hit_at_k, mrr_at_k, ndcg_at_k, recall_at_k  # noqa: E402
 
@@ -119,7 +119,7 @@ def main() -> None:
 
     spec = EMBEDDERS[args.embedder]
     embedder = SentenceTransformer(spec["repo"], revision=spec["revision"], device="cpu")
-    reranker = CrossEncoder(RERANKER[0], revision=RERANKER[1], device="cpu")
+    reranker = load_reranker(device="cpu")
 
     with tempfile.TemporaryDirectory() as tmp:
         engine, n_stored = build_engine(corpus, args.embedder, embedder, reranker, tmp, args.dataset)

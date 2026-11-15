@@ -77,13 +77,16 @@ Ollama abstracts away quantization, model management, and serving, enabling fast
 
 | Model                   | Dim  | Speed  | Quality   | Decision    |
 | ----------------------- | ---- | ------ | --------- | ----------- |
-| **all-MiniLM-L6-v2**    | 384  | Fast   | Good      | ✅ Default   |
+| all-MiniLM-L6-v2        | 384  | Fast   | Good      | First default |
+| **bge-small-en-v1.5**   | 384  | Fast   | Better    | ✅ Default (measured, see README) |
 | all-mpnet-base-v2       | 768  | Medium | Better    | Alternative |
 | BGE-large               | 1024 | Slow   | Excellent | ❌ Memory    |
 | OpenAI text-embedding-3 | 1536 | API    | Excellent | ❌ Cloud     |
 
 **Rationale**
 MiniLM provides an excellent speed-to-quality ratio and consistently ranks well on MTEB semantic retrieval tasks while remaining CPU-friendly.
+It was replaced later by bge-small-en-v1.5, which has the same vector size and searched better in this
+project's own measurement (README, "How well the search works").
 [see here: mteb leadorboard](https://huggingface.co/spaces/mteb/leaderboard)
 
 ---

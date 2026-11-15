@@ -17,6 +17,7 @@ from bs4 import BeautifulSoup
 from docx import Document
 from openpyxl import load_workbook
 from pptx import Presentation
+import torch
 from sentence_transformers import CrossEncoder, SentenceTransformer
 
 try:
@@ -37,7 +38,7 @@ except ImportError:
 
 # Embedding models the engine can use. Each expects its own prefix before a question (and
 # sometimes before a passage). bge-small-en-v1.5 was chosen on the SciFact training claims
-# (nDCG@10 0.747 against 0.660 for all-MiniLM-L6-v2; see evaluation/).
+# (see evaluation/embedder_choice.py and evaluation/embedder_choice.json).
 EMBEDDERS = {
     "bge-small-en-v1.5": {
         "repo": "BAAI/bge-small-en-v1.5",
@@ -52,8 +53,44 @@ EMBEDDERS = {
         "passage_prefix": "",
     },
 }
-DEFAULT_EMBEDDER = os.getenv("RAG_EMBEDDER", "bge-small-en-v1.5")
+DEFAULT_EMBEDDER = "bge-small-en-v1.5"
 RERANKER = ("cross-encoder/ms-marco-MiniLM-L-6-v2", "233902d25c440f23af6f7d6e94d2946bac0bee0a")
+
+
+def load_reranker(repo: str = RERANKER[0], revision: str = RERANKER[1],
+                  device: Optional[str] = None) -> CrossEncoder:
+    """The reranker giving raw scores; the engine turns them into a confidence with its own sigmoid.
+
+    Without ``activation_fn``, sentence-transformers applies a sigmoid to models whose config
+    names no activation (bge-reranker-base, for one), and the engine's sigmoid would come on top.
+    """
+    return CrossEncoder(repo, revision=revision, device=device, activation_fn=torch.nn.Identity())
+
+
+def resolve_embedder(name: Optional[str]) -> str:
+    """The ``EMBEDDERS`` key for a name or a Hugging Face repo id; empty means the default."""
+    name = (name or "").strip() or DEFAULT_EMBEDDER
+    for key, spec in EMBEDDERS.items():
+        if name in (key, spec["repo"]):
+            return key
+    raise ValueError(f"Unknown embedder {name!r}. Use one of {sorted(EMBEDDERS)}.")
+
+
+def embedder_record(key: str) -> Dict[str, str]:
+    """What is stored with an index, so it is never searched with a different model."""
+    spec = EMBEDDERS[key]
+    return {"embedder": key, "embedder_repo": spec["repo"], "embedder_revision": spec["revision"]}
+
+
+def check_embedder_record(stored: Optional[Dict], key: str, where: str) -> None:
+    """Raise if an index was built with another model (indexes without a record are accepted)."""
+    wanted = embedder_record(key)
+    stored = {k: v for k, v in (stored or {}).items() if k in wanted}
+    if stored and stored != wanted:
+        raise ValueError(
+            f"The index in {where} was built with {stored}, not with {wanted}. "
+            f"Use the matching RAG_EMBEDDER, or move the index away to build a new one."
+        )
 
 
 def bm25_tokens(text: str) -> List[str]:
@@ -75,7 +112,7 @@ class RAGEngine:
         backend: str = "chroma",
         embedding_model: Optional[SentenceTransformer] = None,
         reranker: Optional[CrossEncoder] = None,
-        embedder: str = DEFAULT_EMBEDDER,
+        embedder: Optional[str] = None,
     ):
         """Initialize the Enhanced RAG Engine.
 
@@ -86,13 +123,14 @@ class RAGEngine:
             embedding_model: Pre-loaded SentenceTransformer (avoids reload);
                 it must be the model named by ``embedder``.
             reranker: Pre-loaded CrossEncoder reranker (avoids reload).
-            embedder: A key of ``EMBEDDERS`` (default: ``RAG_EMBEDDER`` or
-                bge-small-en-v1.5). Each embedder has its own index, because
-                vectors from different models cannot be mixed.
+            embedder: A key of ``EMBEDDERS`` or its repo id (default: the
+                ``RAG_EMBEDDER`` environment variable, else bge-small-en-v1.5).
+                Each embedder has its own index, because vectors from different
+                models cannot be mixed; the model is recorded with the index and
+                checked when the index is opened.
         """
         self.backend = backend
-        if embedder not in EMBEDDERS:
-            raise ValueError(f"Unknown embedder {embedder!r}. Use one of {sorted(EMBEDDERS)}.")
+        embedder = resolve_embedder(embedder if embedder is not None else os.getenv("RAG_EMBEDDER"))
         self.embedder = embedder
         spec = EMBEDDERS[embedder]
         self.query_prefix = spec["query_prefix"]
@@ -113,7 +151,7 @@ class RAGEngine:
             self.reranker = reranker
         else:
             print("Loading reranker model...")
-            self.reranker = CrossEncoder(RERANKER[0], revision=RERANKER[1])
+            self.reranker = load_reranker()
 
         # --- Backend-specific initialisation ---
         if backend == "chroma":
@@ -121,6 +159,12 @@ class RAGEngine:
             self.collection = self.chroma_client.get_or_create_collection(
                 name=collection_name
             )
+            check_embedder_record(self.collection.metadata, embedder,
+                                  f"ChromaDB collection {collection_name!r}")
+            if not (self.collection.metadata or {}).get("embedder"):
+                # New collection, or one made before the model was recorded.
+                self.collection.modify(metadata={**(self.collection.metadata or {}),
+                                                 **embedder_record(embedder)})
         elif backend == "faiss":
             if not FAISS_AVAILABLE:
                 raise ImportError(
@@ -173,6 +217,18 @@ class RAGEngine:
             self.faiss_documents: List[str] = sidecar["documents"]
             self.faiss_metadatas: List[Dict] = sidecar["metadatas"]
             self.faiss_ids: List[str] = sidecar["ids"]
+            check_embedder_record(sidecar.get("embedder"), self.embedder, f"FAISS folder {db_path!r}")
+            if self.faiss_index.d != self.embedding_dim:
+                raise ValueError(
+                    f"The FAISS index in {db_path!r} holds vectors of size {self.faiss_index.d}, "
+                    f"but {self.embedder} gives {self.embedding_dim}."
+                )
+            if not (self.faiss_index.ntotal == len(self.faiss_documents)
+                    == len(self.faiss_metadatas) == len(self.faiss_ids)):
+                raise ValueError(
+                    f"The FAISS index in {db_path!r} does not match its metadata file "
+                    f"({self.faiss_index.ntotal} vectors, {len(self.faiss_documents)} passages)."
+                )
             print(
                 f"Loaded FAISS index with "
                 f"{self.faiss_index.ntotal} vectors"
@@ -196,6 +252,7 @@ class RAGEngine:
                     "documents": self.faiss_documents,
                     "metadatas": self.faiss_metadatas,
                     "ids": self.faiss_ids,
+                    "embedder": embedder_record(self.embedder),
                 },
                 fh,
             )
@@ -260,6 +317,7 @@ class RAGEngine:
                 "total_vectors": self.faiss_index.ntotal,
                 "index_type": type(self.faiss_index).__name__,
                 "dimension": self.embedding_dim,
+                "embedder": self.embedder,
             }
         # chroma
         count = self.collection.count()
@@ -267,6 +325,7 @@ class RAGEngine:
             "backend": "chroma",
             "total_vectors": count,
             "collection": self.collection.name,
+            "embedder": self.embedder,
         }
 
     # ------------------------------------------------------------------

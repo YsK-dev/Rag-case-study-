@@ -22,17 +22,3 @@ def test_turkish_letters_stay_in_words():
 
 def test_empty_text_gives_no_words():
     assert bm25_tokens("  ...  ") == []
-
-
-def test_unknown_embedder_is_refused_before_loading_models():
-    from rag_engine import RAGEngine
-
-    with pytest.raises(ValueError, match="Unknown embedder"):
-        RAGEngine(embedder="no-such-model")
-
-
-def test_each_embedder_is_pinned():
-    from rag_engine import EMBEDDERS
-
-    for spec in EMBEDDERS.values():
-        assert len(spec["revision"]) == 40

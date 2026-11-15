@@ -32,12 +32,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sentence_transformers import CrossEncoder, SentenceTransformer
+from sentence_transformers import SentenceTransformer
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from rag_engine import EMBEDDERS, RERANKER, RAGEngine  # noqa: E402
+from rag_engine import EMBEDDERS, RAGEngine, load_reranker  # noqa: E402
 
 from evaluation.retrieval_eval import load  # noqa: E402
 
@@ -87,7 +87,7 @@ def main() -> None:
 
     spec = EMBEDDERS[args.embedder]
     embedder = SentenceTransformer(spec["repo"], revision=spec["revision"], device="cpu")
-    reranker = CrossEncoder(RERANKER[0], revision=RERANKER[1], device="cpu")
+    reranker = load_reranker(device="cpu")
 
     rows = []
     t_start = time.time()
