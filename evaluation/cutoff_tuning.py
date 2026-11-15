@@ -16,6 +16,10 @@ Score of a cut-off = mean of
 The cut-off with the best score on the training claims is chosen (ties: the lower one) and then
 reported on the test claims, next to the app's old 0.3.
 
+This score turned out to be a poor rule: refusing every claim scores 0.5, answering every claim
+about 0.38, so it favours refusing. It chose 0.95, the top of the range; the app keeps 0.3. The
+useful output is the whole trade-off (`sweep` in the results file), shown in the README.
+
     python -m evaluation.cutoff_tuning --embedder bge-small-en-v1.5
 """
 
