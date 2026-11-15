@@ -38,7 +38,8 @@ Choices below were made on SciFact's 809 training claims and then checked once o
 claims. That check is not fully independent: 196 of the test claims have an answering abstract
 that also answers a training claim, and SciFact's test claims are part of the public MTEB
 benchmark on which embedding models are usually compared. So the main choice was also checked
-on a second dataset, FiQA, that played no part in it.
+on a second dataset, FiQA, that played no part in it. FiQA is in MTEB too, so it checks this
+project's choice, not the public rankings.
 
 | Search set-up (10 results) | nDCG@10 | Recall@10 | Hit@3 | Time per claim |
 |---|---|---|---|---|
@@ -69,7 +70,15 @@ on a second dataset, FiQA, that played no part in it.
   posts and everyday questions about money), which played no part in the choice, it is +0.035
   (interval +0.017 to +0.053) and Hit@3 goes from 51.2% to 54.3% (+3.1 points, interval +0.2 to
   +6.2). The rule for FiQA, also fixed in advance, was to go back to the old model only if the new
-  one was clearly worse there.
+  one was clearly worse there. In order of events: `bge-small-en-v1.5` was first compared with the
+  old model in a quick check whose test numbers were seen; the written rule and the third model
+  came after that. The training-claim numbers are the same in both, so the choice does not change.
+- **Part of the SciFact gain comes from text length.** The old model reads only the first 256
+  tokens (word pieces) of a text, the new one up to 512, and 71% of SciFact abstracts are longer
+  than 256 tokens. For test claims whose answering abstract fits in 256 tokens, the gain is +0.030
+  (interval −0.016 to +0.076, 86 claims); for longer ones, +0.083 (+0.052 to +0.116, 214 claims).
+  The app's passages are at most about 1,000 characters, mostly under 256 tokens, so the gain the
+  app sees is more likely near FiQA's +0.035, where only 19% of posts are longer than 256 tokens.
 - **What it costs:** turning documents into vectors takes about 3 to 5 times longer (SciFact:
   6.9 minutes against 2.5; FiQA: 53 against 11, on this laptop), so uploads are slower. Each
   passage is still stored as 384 numbers, so the index does not grow. The model is a larger
@@ -177,8 +186,8 @@ reranker's confidence (AUROC 0.69 against 0.70).
   faster.
 
 **The reranker stays the default for now.** The evidence is mixed and comes from one dataset of
-scientific claims, while the reranker was trained on everyday web questions, which are closer to
-what users ask. Whether to drop it is the next thing to test on a second dataset.
+scientific claims, while the reranker was trained on everyday web questions, which may be closer
+to what users ask. Whether to drop it is the next thing to test on a second dataset.
 
 **A larger reranker did not help either.** Two candidates went into the app's call without the
 cut-off, on the 809 training claims. The rule, fixed before running: switch only if the paired
@@ -199,8 +208,8 @@ Reproduce (downloads the pinned benchmark and models; times on a laptop CPU):
 
 ```bash
 pip install -r requirements-eval.txt
-python -m evaluation.embedder_choice --dataset scifact     # embedding model choice, about 12 min
-python -m evaluation.embedder_choice --dataset fiqa        # check on FiQA
+python -m evaluation.embedder_choice --dataset scifact     # embedding model choice, about 16 min
+python -m evaluation.embedder_choice --dataset fiqa        # check on FiQA, about 65 min
 python -m evaluation.retrieval_eval --dataset scifact      # first table, about 25 min
 python -m evaluation.compare dense dense+rerank             # paired difference with 95% interval
 python -m evaluation.compare dense dense --metric hit3 \

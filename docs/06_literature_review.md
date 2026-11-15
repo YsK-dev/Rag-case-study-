@@ -78,7 +78,7 @@ Ollama abstracts away quantization, model management, and serving, enabling fast
 | Model                   | Dim  | Speed  | Quality   | Decision    |
 | ----------------------- | ---- | ------ | --------- | ----------- |
 | all-MiniLM-L6-v2        | 384  | Fast   | Good      | First default |
-| **bge-small-en-v1.5**   | 384  | Fast   | Better    | ✅ Default (measured, see README) |
+| **bge-small-en-v1.5**   | 384  | Medium | Better    | ✅ Default (measured, see README) |
 | all-mpnet-base-v2       | 768  | Medium | Better    | Alternative |
 | BGE-large               | 1024 | Slow   | Excellent | ❌ Memory    |
 | OpenAI text-embedding-3 | 1536 | API    | Excellent | ❌ Cloud     |

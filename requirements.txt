@@ -2,7 +2,7 @@ fastapi
 uvicorn
 requests
 chromadb
-sentence-transformers
+sentence-transformers>=4.0
 pypdf
 python-multipart
 ollama

@@ -140,6 +140,35 @@ class RAGEngine:
             collection_name = f"{collection_name}-{embedder}"
             db_path = os.path.join(db_path, embedder) if backend == "faiss" else db_path
 
+        # --- Is the index on disk from this model? Checked before any model loads. ---
+        if backend == "chroma":
+            self.chroma_client = chromadb.PersistentClient(path=db_path)
+            self.collection = self.chroma_client.get_or_create_collection(
+                name=collection_name
+            )
+            meta = self.collection.metadata or {}
+            check_embedder_record(meta, embedder, f"ChromaDB collection {collection_name!r}")
+            if not meta.get("embedder"):
+                # New collection, or one made before the model was recorded. Distance settings
+                # ("hnsw:...") cannot be passed to modify(), so they are left out.
+                kept = {k: v for k, v in meta.items() if not k.startswith("hnsw:")}
+                self.collection.modify(metadata={**kept, **embedder_record(embedder)})
+        elif backend == "faiss":
+            if not FAISS_AVAILABLE:
+                raise ImportError(
+                    "faiss-cpu is required for the FAISS backend. "
+                    "Install with: pip install faiss-cpu"
+                )
+            meta_path = os.path.join(db_path, "faiss_meta.json")
+            if os.path.exists(meta_path):
+                with open(meta_path, "r", encoding="utf-8") as fh:
+                    check_embedder_record(json_mod.load(fh).get("embedder"), embedder,
+                                          f"FAISS folder {db_path!r}")
+        else:
+            raise ValueError(
+                f"Unknown backend: {backend}. Use 'chroma' or 'faiss'."
+            )
+
         # --- Shared models (load once, reuse across backends) ---
         if embedding_model is not None:
             self.embedding_model = embedding_model
@@ -153,29 +182,9 @@ class RAGEngine:
             print("Loading reranker model...")
             self.reranker = load_reranker()
 
-        # --- Backend-specific initialisation ---
-        if backend == "chroma":
-            self.chroma_client = chromadb.PersistentClient(path=db_path)
-            self.collection = self.chroma_client.get_or_create_collection(
-                name=collection_name
-            )
-            check_embedder_record(self.collection.metadata, embedder,
-                                  f"ChromaDB collection {collection_name!r}")
-            if not (self.collection.metadata or {}).get("embedder"):
-                # New collection, or one made before the model was recorded.
-                self.collection.modify(metadata={**(self.collection.metadata or {}),
-                                                 **embedder_record(embedder)})
-        elif backend == "faiss":
-            if not FAISS_AVAILABLE:
-                raise ImportError(
-                    "faiss-cpu is required for the FAISS backend. "
-                    "Install with: pip install faiss-cpu"
-                )
+        # --- FAISS needs the model's vector size to open or create its index ---
+        if backend == "faiss":
             self._init_faiss(db_path)
-        else:
-            raise ValueError(
-                f"Unknown backend: {backend}. Use 'chroma' or 'faiss'."
-            )
 
         # --- BM25 cache (avoids rebuilding index on every query) ---
         self._bm25_cache: Optional[Dict] = None

@@ -76,6 +76,27 @@ def test_collection_built_with_another_revision_is_refused(tmp_path):
         engine(tmp_path)
 
 
+def test_mismatch_is_found_before_any_model_loads(tmp_path, monkeypatch):
+    e = engine(tmp_path)
+    e.collection.modify(metadata={**e.collection.metadata, "embedder_revision": "0" * 40})
+
+    def boom(*_, **__):
+        raise AssertionError("a model was loaded")
+
+    monkeypatch.setattr(rag_engine, "SentenceTransformer", boom)
+    monkeypatch.setattr(rag_engine, "CrossEncoder", boom)
+    with pytest.raises(ValueError, match="was built with"):
+        RAGEngine(db_path=str(tmp_path), collection_name="docs", embedder=BGE)
+
+
+def test_collection_with_distance_settings_gets_its_record(tmp_path):
+    import chromadb
+
+    chromadb.PersistentClient(path=str(tmp_path)).get_or_create_collection(
+        f"docs-{BGE}", metadata={"hnsw:space": "l2"})
+    assert engine(tmp_path).collection.metadata["embedder"] == BGE
+
+
 def test_old_collection_without_a_record_is_accepted_and_recorded(tmp_path):
     import chromadb
 

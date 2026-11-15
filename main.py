@@ -127,6 +127,9 @@ else:
             embedder=rag_engine_chroma.embedder,
         )
         print("FAISS engine initialized successfully.")
+    except ValueError as e:
+        logger.error(f"FAISS index not used, it does not match: {e}")
+        print(f"FAISS index not used ({e}), using ChromaDB only.")
     except Exception as e:
         logger.warning(f"FAISS not available, using ChromaDB only: {e}")
         print(f"FAISS not available ({e}), using ChromaDB only.")
