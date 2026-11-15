@@ -68,6 +68,68 @@
       "claims": 300
     }
   },
+  "difference_vector_minus_reranker": {
+    "train": {
+      "cutoffs_matched": {
+        "hit@3_answerable": {
+          "difference": 0.0124,
+          "interval_95": [
+            -0.0148,
+            0.0396
+          ],
+          "claims": 809
+        },
+        "no_passage_unanswerable": {
+          "difference": 0.0,
+          "interval_95": [
+            -0.0334,
+            0.0321
+          ],
+          "claims": 809
+        }
+      },
+      "no_cutoff": {
+        "hit@3_answerable": {
+          "difference": 0.0309,
+          "interval_95": [
+            0.0049,
+            0.0556
+          ],
+          "claims": 809
+        }
+      }
+    },
+    "test": {
+      "cutoffs_matched": {
+        "hit@3_answerable": {
+          "difference": -0.0267,
+          "interval_95": [
+            -0.0667,
+            0.0133
+          ],
+          "claims": 300
+        },
+        "no_passage_unanswerable": {
+          "difference": -0.0033,
+          "interval_95": [
+            -0.05,
+            0.0467
+          ],
+          "claims": 300
+        }
+      },
+      "no_cutoff": {
+        "hit@3_answerable": {
+          "difference": 0.0067,
+          "interval_95": [
+            -0.03,
+            0.0433
+          ],
+          "claims": 300
+        }
+      }
+    }
+  },
   "vector_path_ms_per_claim_median": 17.9,
   "minutes": 8.2
 }

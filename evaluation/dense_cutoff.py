@@ -14,8 +14,11 @@ no keyword search, no reranker. A passage is kept if its similarity is >= the cu
    many unanswerable training claims as the reranker path at the app's old cut-off (0.3).
    Both are then compared on the test claims: Hit@3 on the answerable index, share of claims
    with no passage on the unanswerable index, each with a paired 95% bootstrap interval.
+3. For the record, the same paired differences on the training claims too, and without any
+   cut-off on both paths (`difference_vector_minus_reranker`).
 
     python -m evaluation.dense_cutoff --embedder bge-small-en-v1.5
+    python -m evaluation.dense_cutoff --saved   # recompute from the saved per-claim results
 """
 
 import argparse
@@ -72,6 +75,9 @@ def summary(rows: list[dict], t: float, key: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--embedder", choices=sorted(EMBEDDERS), default="bge-small-en-v1.5")
+    parser.add_argument("--saved", action="store_true",
+                        help="reuse the saved per-claim results instead of searching again "
+                             "(timings are kept from the run that searched)")
     args = parser.parse_args()
 
     rerank_file = OUT_DIR / f"cutoff_per_claim_{args.embedder}.jsonl"
@@ -79,6 +85,14 @@ def main() -> None:
 
     corpus, test_q, test_rel = load("scifact", "test")
     _, train_q, train_rel = load("scifact", "train")
+    out_json = OUT_DIR / f"dense_cutoff_{args.embedder}.json"
+    out_rows = OUT_DIR / f"dense_per_claim_{args.embedder}.jsonl"
+    if args.saved:
+        rows = [json.loads(line) for line in open(out_rows, encoding="utf-8")]
+        before = json.loads(out_json.read_text())
+        report(args.embedder, rows, rerank_rows, len(train_q), len(test_q),
+               before["vector_path_ms_per_claim_median"], before["minutes"], out_json)
+        return
     texts = [(t + "\n" + b).strip() for t, b in zip(corpus["title"].fillna("").astype(str),
                                                     corpus["text"].fillna("").astype(str))]
     ids = corpus["_id"].astype(str).tolist()
@@ -117,6 +131,15 @@ def main() -> None:
                                  "relevant": [relevant[qid].get(f, 0) > 0 for f in found]})
             print(f"{split}: {len(questions)} claims done; {time.time() - t_start:.0f} s", flush=True)
 
+    with open(out_rows, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+    report(args.embedder, rows, rerank_rows, len(train_q), len(test_q),
+           round(statistics.median(ms), 1), round((time.time() - t_start) / 60, 1), out_json)
+
+
+def report(embedder: str, rows: list[dict], rerank_rows: list[dict], n_train: int, n_test: int,
+           ms_median: float, minutes: float, out_json: Path) -> None:
     def part(rs, split):
         return [r for r in rs if r["split"] == split]
 
@@ -139,19 +162,28 @@ def main() -> None:
                   if summary(part(rows, "train"), t, "similarity")["no_passage_unanswerable"] >= target)
 
     vec_test, rr_test = part(rows, "test"), part(rerank_rows, "test")
-    by_id = {(r["index"], r["query_id"]): r for r in rr_test}
-    paired = {}
-    for index_name, fn in (("answerable", hit), ("unanswerable", refused)):
-        v = [r for r in vec_test if r["index"] == index_name]
-        diff = np.array([float(fn(r, chosen, "similarity")) - float(fn(by_id[(index_name, r["query_id"])], OLD_CUTOFF, "confidence"))
-                         for r in v])
-        mean, low, high = paired_bootstrap(diff)
-        paired["hit@3_answerable" if index_name == "answerable" else "no_passage_unanswerable"] = {
-            "difference": round(mean, 4), "interval_95": [round(low, 4), round(high, 4)], "claims": len(diff)}
+
+    def differences(split, t_vec, t_rr, measures):
+        by_id = {(r["index"], r["query_id"]): r for r in part(rerank_rows, split)}
+        out = {}
+        for index_name, fn in measures:
+            v = [r for r in part(rows, split) if r["index"] == index_name]
+            diff = np.array([float(fn(r, t_vec, "similarity"))
+                             - float(fn(by_id[(index_name, r["query_id"])], t_rr, "confidence")) for r in v])
+            mean, low, high = paired_bootstrap(diff)
+            out["hit@3_answerable" if index_name == "answerable" else "no_passage_unanswerable"] = {
+                "difference": round(mean, 4), "interval_95": [round(low, 4), round(high, 4)], "claims": len(diff)}
+        return out
+
+    both = (("answerable", hit), ("unanswerable", refused))
+    paired = differences("test", chosen, OLD_CUTOFF, both)
+    every = {split: {"cutoffs_matched": differences(split, chosen, OLD_CUTOFF, both),
+                     "no_cutoff": differences(split, 0.0, 0.0, (("answerable", hit),))}
+             for split in ("train", "test")}
 
     result = {
-        "embedder": args.embedder,
-        "claims": {"train": len(train_q), "test": len(test_q)},
+        "embedder": embedder,
+        "claims": {"train": n_train, "test": n_test},
         "auroc_answerable_vs_unanswerable": separation,
         "reranker_path_old_cutoff": {"cutoff": OLD_CUTOFF,
                                      "train": summary(part(rerank_rows, "train"), OLD_CUTOFF, "confidence"),
@@ -161,13 +193,11 @@ def main() -> None:
                                         "test": summary(vec_test, chosen, "similarity")},
         "vector_path_without_cutoff_test": summary(vec_test, 0.0, "similarity"),
         "test_difference_vector_minus_reranker": paired,
-        "vector_path_ms_per_claim_median": round(statistics.median(ms), 1),
-        "minutes": round((time.time() - t_start) / 60, 1),
+        "difference_vector_minus_reranker": every,
+        "vector_path_ms_per_claim_median": ms_median,
+        "minutes": minutes,
     }
-    (OUT_DIR / f"dense_cutoff_{args.embedder}.json").write_text(json.dumps(result, indent=2) + "\n")
-    with open(OUT_DIR / f"dense_per_claim_{args.embedder}.jsonl", "w", encoding="utf-8") as f:
-        for r in rows:
-            f.write(json.dumps(r) + "\n")
+    out_json.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result, indent=2))
 
 
