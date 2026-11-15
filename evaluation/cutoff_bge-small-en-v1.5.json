@@ -1,0 +1,358 @@
+{
+  "embedder": "bge-small-en-v1.5",
+  "claims": {
+    "train": 809,
+    "test": 300
+  },
+  "chosen_cutoff_on_train": 0.95,
+  "test_at_chosen": {
+    "cutoff": 0.95,
+    "hit@3_answerable": 0.4767,
+    "answered_answerable": 0.5633,
+    "no_passage_unanswerable": 0.74,
+    "score": 0.6083
+  },
+  "test_at_old_0.3": {
+    "cutoff": 0.3,
+    "hit@3_answerable": 0.67,
+    "answered_answerable": 0.8767,
+    "no_passage_unanswerable": 0.3033,
+    "score": 0.4867
+  },
+  "test_without_cutoff": {
+    "cutoff": 0.0,
+    "hit@3_answerable": 0.7233,
+    "answered_answerable": 1.0,
+    "no_passage_unanswerable": 0.0,
+    "score": 0.3617
+  },
+  "sweep": {
+    "train": [
+      {
+        "cutoff": 0.0,
+        "hit@3_answerable": 0.759,
+        "answered_answerable": 1.0,
+        "no_passage_unanswerable": 0.0,
+        "score": 0.3795
+      },
+      {
+        "cutoff": 0.01,
+        "hit@3_answerable": 0.7528,
+        "answered_answerable": 0.9802,
+        "no_passage_unanswerable": 0.0606,
+        "score": 0.4067
+      },
+      {
+        "cutoff": 0.02,
+        "hit@3_answerable": 0.7417,
+        "answered_answerable": 0.974,
+        "no_passage_unanswerable": 0.0754,
+        "score": 0.4085
+      },
+      {
+        "cutoff": 0.03,
+        "hit@3_answerable": 0.7379,
+        "answered_answerable": 0.9654,
+        "no_passage_unanswerable": 0.0878,
+        "score": 0.4129
+      },
+      {
+        "cutoff": 0.05,
+        "hit@3_answerable": 0.7305,
+        "answered_answerable": 0.953,
+        "no_passage_unanswerable": 0.1211,
+        "score": 0.4258
+      },
+      {
+        "cutoff": 0.1,
+        "hit@3_answerable": 0.7206,
+        "answered_answerable": 0.9308,
+        "no_passage_unanswerable": 0.1805,
+        "score": 0.4506
+      },
+      {
+        "cutoff": 0.15,
+        "hit@3_answerable": 0.7157,
+        "answered_answerable": 0.9122,
+        "no_passage_unanswerable": 0.2287,
+        "score": 0.4722
+      },
+      {
+        "cutoff": 0.2,
+        "hit@3_answerable": 0.712,
+        "answered_answerable": 0.9036,
+        "no_passage_unanswerable": 0.2571,
+        "score": 0.4845
+      },
+      {
+        "cutoff": 0.25,
+        "hit@3_answerable": 0.6996,
+        "answered_answerable": 0.8949,
+        "no_passage_unanswerable": 0.2769,
+        "score": 0.4883
+      },
+      {
+        "cutoff": 0.3,
+        "hit@3_answerable": 0.6885,
+        "answered_answerable": 0.8826,
+        "no_passage_unanswerable": 0.3066,
+        "score": 0.4975
+      },
+      {
+        "cutoff": 0.35,
+        "hit@3_answerable": 0.6724,
+        "answered_answerable": 0.8603,
+        "no_passage_unanswerable": 0.3399,
+        "score": 0.5062
+      },
+      {
+        "cutoff": 0.4,
+        "hit@3_answerable": 0.6675,
+        "answered_answerable": 0.8566,
+        "no_passage_unanswerable": 0.3511,
+        "score": 0.5093
+      },
+      {
+        "cutoff": 0.45,
+        "hit@3_answerable": 0.6613,
+        "answered_answerable": 0.848,
+        "no_passage_unanswerable": 0.382,
+        "score": 0.5216
+      },
+      {
+        "cutoff": 0.5,
+        "hit@3_answerable": 0.6489,
+        "answered_answerable": 0.8368,
+        "no_passage_unanswerable": 0.3993,
+        "score": 0.5241
+      },
+      {
+        "cutoff": 0.55,
+        "hit@3_answerable": 0.6415,
+        "answered_answerable": 0.8257,
+        "no_passage_unanswerable": 0.4227,
+        "score": 0.5321
+      },
+      {
+        "cutoff": 0.6,
+        "hit@3_answerable": 0.6378,
+        "answered_answerable": 0.8084,
+        "no_passage_unanswerable": 0.4524,
+        "score": 0.5451
+      },
+      {
+        "cutoff": 0.65,
+        "hit@3_answerable": 0.6267,
+        "answered_answerable": 0.7948,
+        "no_passage_unanswerable": 0.471,
+        "score": 0.5488
+      },
+      {
+        "cutoff": 0.7,
+        "hit@3_answerable": 0.6119,
+        "answered_answerable": 0.7738,
+        "no_passage_unanswerable": 0.4969,
+        "score": 0.5544
+      },
+      {
+        "cutoff": 0.75,
+        "hit@3_answerable": 0.5946,
+        "answered_answerable": 0.7515,
+        "no_passage_unanswerable": 0.5216,
+        "score": 0.5581
+      },
+      {
+        "cutoff": 0.8,
+        "hit@3_answerable": 0.581,
+        "answered_answerable": 0.7268,
+        "no_passage_unanswerable": 0.5538,
+        "score": 0.5674
+      },
+      {
+        "cutoff": 0.85,
+        "hit@3_answerable": 0.5661,
+        "answered_answerable": 0.6934,
+        "no_passage_unanswerable": 0.6007,
+        "score": 0.5834
+      },
+      {
+        "cutoff": 0.9,
+        "hit@3_answerable": 0.5389,
+        "answered_answerable": 0.6601,
+        "no_passage_unanswerable": 0.6465,
+        "score": 0.5927
+      },
+      {
+        "cutoff": 0.95,
+        "hit@3_answerable": 0.4759,
+        "answered_answerable": 0.5773,
+        "no_passage_unanswerable": 0.7268,
+        "score": 0.6014
+      }
+    ],
+    "test": [
+      {
+        "cutoff": 0.0,
+        "hit@3_answerable": 0.7233,
+        "answered_answerable": 1.0,
+        "no_passage_unanswerable": 0.0,
+        "score": 0.3617
+      },
+      {
+        "cutoff": 0.01,
+        "hit@3_answerable": 0.7133,
+        "answered_answerable": 0.96,
+        "no_passage_unanswerable": 0.0567,
+        "score": 0.385
+      },
+      {
+        "cutoff": 0.02,
+        "hit@3_answerable": 0.7133,
+        "answered_answerable": 0.9533,
+        "no_passage_unanswerable": 0.0867,
+        "score": 0.4
+      },
+      {
+        "cutoff": 0.03,
+        "hit@3_answerable": 0.7133,
+        "answered_answerable": 0.95,
+        "no_passage_unanswerable": 0.1,
+        "score": 0.4067
+      },
+      {
+        "cutoff": 0.05,
+        "hit@3_answerable": 0.71,
+        "answered_answerable": 0.94,
+        "no_passage_unanswerable": 0.1267,
+        "score": 0.4183
+      },
+      {
+        "cutoff": 0.1,
+        "hit@3_answerable": 0.7,
+        "answered_answerable": 0.9233,
+        "no_passage_unanswerable": 0.19,
+        "score": 0.445
+      },
+      {
+        "cutoff": 0.15,
+        "hit@3_answerable": 0.6933,
+        "answered_answerable": 0.8967,
+        "no_passage_unanswerable": 0.24,
+        "score": 0.4667
+      },
+      {
+        "cutoff": 0.2,
+        "hit@3_answerable": 0.68,
+        "answered_answerable": 0.8833,
+        "no_passage_unanswerable": 0.2767,
+        "score": 0.4783
+      },
+      {
+        "cutoff": 0.25,
+        "hit@3_answerable": 0.6733,
+        "answered_answerable": 0.8833,
+        "no_passage_unanswerable": 0.29,
+        "score": 0.4817
+      },
+      {
+        "cutoff": 0.3,
+        "hit@3_answerable": 0.67,
+        "answered_answerable": 0.8767,
+        "no_passage_unanswerable": 0.3033,
+        "score": 0.4867
+      },
+      {
+        "cutoff": 0.35,
+        "hit@3_answerable": 0.66,
+        "answered_answerable": 0.8633,
+        "no_passage_unanswerable": 0.33,
+        "score": 0.495
+      },
+      {
+        "cutoff": 0.4,
+        "hit@3_answerable": 0.6567,
+        "answered_answerable": 0.8633,
+        "no_passage_unanswerable": 0.3367,
+        "score": 0.4967
+      },
+      {
+        "cutoff": 0.45,
+        "hit@3_answerable": 0.6433,
+        "answered_answerable": 0.85,
+        "no_passage_unanswerable": 0.3467,
+        "score": 0.495
+      },
+      {
+        "cutoff": 0.5,
+        "hit@3_answerable": 0.64,
+        "answered_answerable": 0.8433,
+        "no_passage_unanswerable": 0.36,
+        "score": 0.5
+      },
+      {
+        "cutoff": 0.55,
+        "hit@3_answerable": 0.6267,
+        "answered_answerable": 0.82,
+        "no_passage_unanswerable": 0.4,
+        "score": 0.5133
+      },
+      {
+        "cutoff": 0.6,
+        "hit@3_answerable": 0.6167,
+        "answered_answerable": 0.8,
+        "no_passage_unanswerable": 0.4467,
+        "score": 0.5317
+      },
+      {
+        "cutoff": 0.65,
+        "hit@3_answerable": 0.5967,
+        "answered_answerable": 0.7867,
+        "no_passage_unanswerable": 0.4533,
+        "score": 0.525
+      },
+      {
+        "cutoff": 0.7,
+        "hit@3_answerable": 0.5867,
+        "answered_answerable": 0.7667,
+        "no_passage_unanswerable": 0.4933,
+        "score": 0.54
+      },
+      {
+        "cutoff": 0.75,
+        "hit@3_answerable": 0.5767,
+        "answered_answerable": 0.74,
+        "no_passage_unanswerable": 0.5333,
+        "score": 0.555
+      },
+      {
+        "cutoff": 0.8,
+        "hit@3_answerable": 0.5667,
+        "answered_answerable": 0.7133,
+        "no_passage_unanswerable": 0.5867,
+        "score": 0.5767
+      },
+      {
+        "cutoff": 0.85,
+        "hit@3_answerable": 0.5567,
+        "answered_answerable": 0.6867,
+        "no_passage_unanswerable": 0.6267,
+        "score": 0.5917
+      },
+      {
+        "cutoff": 0.9,
+        "hit@3_answerable": 0.52,
+        "answered_answerable": 0.6367,
+        "no_passage_unanswerable": 0.67,
+        "score": 0.595
+      },
+      {
+        "cutoff": 0.95,
+        "hit@3_answerable": 0.4767,
+        "answered_answerable": 0.5633,
+        "no_passage_unanswerable": 0.74,
+        "score": 0.6083
+      }
+    ]
+  },
+  "minutes": 40.4
+}

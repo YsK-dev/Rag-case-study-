@@ -124,6 +124,7 @@ else:
             backend="faiss",
             embedding_model=rag_engine_chroma.embedding_model,
             reranker=rag_engine_chroma.reranker,
+            embedder=rag_engine_chroma.embedder,
         )
         print("FAISS engine initialized successfully.")
     except Exception as e:

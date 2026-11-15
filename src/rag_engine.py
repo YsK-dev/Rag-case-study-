@@ -35,6 +35,27 @@ except ImportError:
     BM25_AVAILABLE = False
 
 
+# Embedding models the engine can use. Each expects its own prefix before a question (and
+# sometimes before a passage). bge-small-en-v1.5 was chosen on the SciFact training claims
+# (nDCG@10 0.747 against 0.660 for all-MiniLM-L6-v2; see evaluation/).
+EMBEDDERS = {
+    "bge-small-en-v1.5": {
+        "repo": "BAAI/bge-small-en-v1.5",
+        "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+        "query_prefix": "Represent this sentence for searching relevant passages: ",
+        "passage_prefix": "",
+    },
+    "all-MiniLM-L6-v2": {
+        "repo": "sentence-transformers/all-MiniLM-L6-v2",
+        "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+        "query_prefix": "",
+        "passage_prefix": "",
+    },
+}
+DEFAULT_EMBEDDER = os.getenv("RAG_EMBEDDER", "bge-small-en-v1.5")
+RERANKER = ("cross-encoder/ms-marco-MiniLM-L-6-v2", "233902d25c440f23af6f7d6e94d2946bac0bee0a")
+
+
 def bm25_tokens(text: str) -> List[str]:
     """Lower-case words for BM25, without punctuation, so that "cancer." matches "cancer".
 
@@ -54,6 +75,7 @@ class RAGEngine:
         backend: str = "chroma",
         embedding_model: Optional[SentenceTransformer] = None,
         reranker: Optional[CrossEncoder] = None,
+        embedder: str = DEFAULT_EMBEDDER,
     ):
         """Initialize the Enhanced RAG Engine.
 
@@ -61,25 +83,37 @@ class RAGEngine:
             db_path: Path to persistent storage.
             collection_name: Name of the ChromaDB collection (chroma only).
             backend: Vector store backend – ``"chroma"`` or ``"faiss"``.
-            embedding_model: Pre-loaded SentenceTransformer (avoids reload).
+            embedding_model: Pre-loaded SentenceTransformer (avoids reload);
+                it must be the model named by ``embedder``.
             reranker: Pre-loaded CrossEncoder reranker (avoids reload).
+            embedder: A key of ``EMBEDDERS`` (default: ``RAG_EMBEDDER`` or
+                bge-small-en-v1.5). Each embedder has its own index, because
+                vectors from different models cannot be mixed.
         """
         self.backend = backend
+        if embedder not in EMBEDDERS:
+            raise ValueError(f"Unknown embedder {embedder!r}. Use one of {sorted(EMBEDDERS)}.")
+        self.embedder = embedder
+        spec = EMBEDDERS[embedder]
+        self.query_prefix = spec["query_prefix"]
+        self.passage_prefix = spec["passage_prefix"]
+        # The index built before this option existed used all-MiniLM-L6-v2 under the plain name.
+        if embedder != "all-MiniLM-L6-v2":
+            collection_name = f"{collection_name}-{embedder}"
+            db_path = os.path.join(db_path, embedder) if backend == "faiss" else db_path
 
         # --- Shared models (load once, reuse across backends) ---
         if embedding_model is not None:
             self.embedding_model = embedding_model
         else:
-            print("Loading embedding model... (this happens only once)")
-            self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
+            print(f"Loading embedding model {embedder}... (this happens only once)")
+            self.embedding_model = SentenceTransformer(spec["repo"], revision=spec["revision"])
 
         if reranker is not None:
             self.reranker = reranker
         else:
             print("Loading reranker model...")
-            self.reranker = CrossEncoder(
-                "cross-encoder/ms-marco-MiniLM-L-6-v2"
-            )
+            self.reranker = CrossEncoder(RERANKER[0], revision=RERANKER[1])
 
         # --- Backend-specific initialisation ---
         if backend == "chroma":
@@ -105,6 +139,20 @@ class RAGEngine:
         print(f"Models loaded. Backend: {backend}")
 
     # ------------------------------------------------------------------
+    # Embeddings (unit length, with the prefixes the model expects)
+    # ------------------------------------------------------------------
+
+    def embed_passages(self, texts: List[str]) -> np.ndarray:
+        return self.embedding_model.encode(
+            [self.passage_prefix + t for t in texts], normalize_embeddings=True
+        )
+
+    def embed_query(self, query: str) -> np.ndarray:
+        return self.embedding_model.encode(
+            [self.query_prefix + query], normalize_embeddings=True
+        )
+
+    # ------------------------------------------------------------------
     # FAISS helpers
     # ------------------------------------------------------------------
 
@@ -113,7 +161,7 @@ class RAGEngine:
         self.faiss_db_path = db_path
         os.makedirs(db_path, exist_ok=True)
 
-        self.embedding_dim = 384  # all-MiniLM-L6-v2 output dim
+        self.embedding_dim = self.embedding_model.get_sentence_embedding_dimension()
 
         index_path = os.path.join(db_path, "faiss.index")
         meta_path = os.path.join(db_path, "faiss_meta.json")
@@ -992,7 +1040,7 @@ class RAGEngine:
             f"{batch_id}_chunk_{i}" for i in range(len(texts))
         ]
 
-        embeddings = self.embedding_model.encode(texts).tolist()
+        embeddings = self.embed_passages(texts).tolist()
 
         if self.backend == "faiss":
             self._faiss_add(texts, embeddings, metadatas, ids)
@@ -1048,9 +1096,7 @@ class RAGEngine:
             Tuple of (documents, metadatas) with confidence.
         """
         initial_k = top_k * 3
-        query_emb = self.embedding_model.encode(
-            [query]
-        ).tolist()
+        query_emb = self.embed_query(query).tolist()
 
         # --- Stage 1a: Semantic (vector) search ---
         if self.backend == "faiss":
@@ -1315,7 +1361,7 @@ class RAGEngine:
             # Rebuild FAISS index
             self.faiss_index = faiss.IndexFlatL2(self.embedding_dim)
             if new_docs:
-                embeddings = self.embedding_model.encode(new_docs).tolist()
+                embeddings = self.embed_passages(new_docs).tolist()
                 vectors = np.array(embeddings, dtype=np.float32)
                 self.faiss_index.add(vectors)
 
@@ -1383,7 +1429,7 @@ class RAGEngine:
             confidence = 1 / (1 + math.exp(-score))
             # ChromaDB default metric is L2 (squared).
             # Convert to cosine similarity: cos_sim = 1 - (L2^2 / 2)
-            # (valid for normalised embeddings like all-MiniLM-L6-v2)
+            # (valid for unit-length embeddings; embed_passages/embed_query normalise them)
             cosine_sim = max(0.0, 1.0 - (dist / 2.0))
             euclidean = math.sqrt(max(0.0, dist))
             enriched = dict(meta) if meta else {}
@@ -1450,7 +1496,7 @@ class RAGEngine:
         bm25_label = " + BM25 keyword" if BM25_AVAILABLE else ""
         strategy = (
             f"Hybrid search: semantic embeddings"
-            f" (all-MiniLM-L6-v2){bm25_label}"
+            f" ({self.embedder}){bm25_label}"
             f" → cross-encoder reranking"
         )
         result: dict = {
