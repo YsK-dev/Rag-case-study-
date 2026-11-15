@@ -38,7 +38,7 @@ except ImportError:
 
 # Embedding models the engine can use. Each expects its own prefix before a question (and
 # sometimes before a passage). bge-small-en-v1.5 was chosen on the SciFact training claims
-# (see evaluation/embedder_choice.py and evaluation/embedder_choice.json).
+# (see evaluation/embedder_choice.py and evaluation/embedder_choice_scifact.json).
 EMBEDDERS = {
     "bge-small-en-v1.5": {
         "repo": "BAAI/bge-small-en-v1.5",

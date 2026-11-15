@@ -1,0 +1,45 @@
+{
+  "dataset": "fiqa",
+  "passages": 57638,
+  "candidates": {
+    "all-MiniLM-L6-v2": {
+      "repo": "sentence-transformers/all-MiniLM-L6-v2",
+      "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+      "minutes_to_embed_passages": 11.0,
+      "test": {
+        "ndcg@10": 0.3687,
+        "hit@3": 0.5123,
+        "questions": 648
+      }
+    },
+    "bge-small-en-v1.5": {
+      "repo": "BAAI/bge-small-en-v1.5",
+      "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+      "minutes_to_embed_passages": 53.3,
+      "test": {
+        "ndcg@10": 0.4035,
+        "hit@3": 0.5432,
+        "questions": 648
+      }
+    }
+  },
+  "difference_new_minus_old": {
+    "test": {
+      "ndcg10": {
+        "difference": 0.0348,
+        "interval_95": [
+          0.0167,
+          0.053
+        ]
+      },
+      "hit3": {
+        "difference": 0.0309,
+        "interval_95": [
+          0.0015,
+          0.0617
+        ]
+      }
+    }
+  },
+  "keep_new_model": true
+}
