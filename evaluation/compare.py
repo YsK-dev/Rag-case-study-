@@ -8,8 +8,9 @@ replacement (5,000 times, seed 0) to get the interval.
     python -m evaluation.compare app_default app_default_no_cutoff --metric hit3
 
     # The same set-up in two runs, for example before and after a code change:
-    git show 4350ee6:evaluation/per_question_scifact.csv > before.csv
-    python -m evaluation.compare bm25 bm25 --csv-b before.csv
+    python -m evaluation.compare dense dense --csv-b evaluation/per_question_scifact_all-MiniLM-L6-v2.csv
+    git show 4350ee6:evaluation/per_question_scifact.csv > before.csv      # before the BM25 fix
+    python -m evaluation.compare bm25 bm25 --csv evaluation/per_question_scifact_all-MiniLM-L6-v2.csv --csv-b before.csv
 """
 
 import argparse
@@ -18,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-DEFAULT_CSV = Path(__file__).resolve().parent / "per_question_scifact.csv"
+DEFAULT_CSV = Path(__file__).resolve().parent / "per_question_scifact_bge-small-en-v1.5.csv"
 
 
 def paired_bootstrap(diff: np.ndarray, resamples: int = 5000, seed: int = 0) -> tuple[float, float, float]:

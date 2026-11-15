@@ -7,7 +7,7 @@ on:
 
 jobs:
   unit-tests:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -19,3 +19,18 @@ jobs:
       - run: python -m pytest -v
         env:
           RAG_TESTING: "1"
+
+  engine-tests:
+    # The engine with its real libraries (ChromaDB, FAISS, sentence-transformers) and a small
+    # fake embedding model, so no model is downloaded.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: pip install -r requirements.txt faiss-cpu
+      - run: python -m pytest -v tests/test_embedders.py tests/test_bm25_tokens.py

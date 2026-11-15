@@ -124,8 +124,12 @@ else:
             backend="faiss",
             embedding_model=rag_engine_chroma.embedding_model,
             reranker=rag_engine_chroma.reranker,
+            embedder=rag_engine_chroma.embedder,
         )
         print("FAISS engine initialized successfully.")
+    except ValueError as e:
+        logger.error(f"FAISS index not used, it does not match: {e}")
+        print(f"FAISS index not used ({e}), using ChromaDB only.")
     except Exception as e:
         logger.warning(f"FAISS not available, using ChromaDB only: {e}")
         print(f"FAISS not available ({e}), using ChromaDB only.")
@@ -137,6 +141,17 @@ else:
 
     # Keep a default alias for backward compatibility
     rag_engine = rag_engine_chroma
+
+    # Each embedding model has its own index. After a change of model (for example the switch
+    # of the default to bge-small-en-v1.5) the new index starts empty, while the uploaded files
+    # are still on disk: say so instead of answering "cannot answer" without a reason.
+    _uploads = [f for f in UPLOAD_DIR.glob("*") if f.suffix.lower() in SUPPORTED_EXTENSIONS]
+    if _uploads and rag_engine_chroma.get_stats()["total_vectors"] == 0:
+        _msg = (f"The index for embedding model {rag_engine_chroma.embedder} is empty, but "
+                f"{len(_uploads)} uploaded file(s) are in {UPLOAD_DIR}. Upload them again to index "
+                f"them with this model, or set RAG_EMBEDDER to the model used before.")
+        logger.warning(_msg)
+        print(f"WARNING: {_msg}")
 
     print("Initializing Ollama LLM...")
     llm_client = OllamaClient(model="qwen3:1.7b")

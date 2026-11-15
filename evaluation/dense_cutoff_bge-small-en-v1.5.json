@@ -1,0 +1,135 @@
+{
+  "embedder": "bge-small-en-v1.5",
+  "claims": {
+    "train": 809,
+    "test": 300
+  },
+  "auroc_answerable_vs_unanswerable": {
+    "train": {
+      "vector_similarity": 0.7018,
+      "reranker_confidence": 0.7135
+    },
+    "test": {
+      "vector_similarity": 0.6905,
+      "reranker_confidence": 0.7044
+    }
+  },
+  "reranker_path_old_cutoff": {
+    "cutoff": 0.3,
+    "train": {
+      "cutoff": 0.3,
+      "hit@3_answerable": 0.6885,
+      "answered_answerable": 0.8826,
+      "no_passage_unanswerable": 0.3066
+    },
+    "test": {
+      "cutoff": 0.3,
+      "hit@3_answerable": 0.67,
+      "answered_answerable": 0.8767,
+      "no_passage_unanswerable": 0.3033
+    }
+  },
+  "vector_path_chosen_on_train": {
+    "cutoff": 0.7406,
+    "train": {
+      "cutoff": 0.7406,
+      "hit@3_answerable": 0.7009,
+      "answered_answerable": 0.8603,
+      "no_passage_unanswerable": 0.3066
+    },
+    "test": {
+      "cutoff": 0.7406,
+      "hit@3_answerable": 0.6433,
+      "answered_answerable": 0.87,
+      "no_passage_unanswerable": 0.3
+    }
+  },
+  "vector_path_without_cutoff_test": {
+    "cutoff": 0.0,
+    "hit@3_answerable": 0.73,
+    "answered_answerable": 1.0,
+    "no_passage_unanswerable": 0.0
+  },
+  "test_difference_vector_minus_reranker": {
+    "hit@3_answerable": {
+      "difference": -0.0267,
+      "interval_95": [
+        -0.0667,
+        0.0133
+      ],
+      "claims": 300
+    },
+    "no_passage_unanswerable": {
+      "difference": -0.0033,
+      "interval_95": [
+        -0.05,
+        0.0467
+      ],
+      "claims": 300
+    }
+  },
+  "difference_vector_minus_reranker": {
+    "train": {
+      "cutoffs_matched": {
+        "hit@3_answerable": {
+          "difference": 0.0124,
+          "interval_95": [
+            -0.0148,
+            0.0396
+          ],
+          "claims": 809
+        },
+        "no_passage_unanswerable": {
+          "difference": 0.0,
+          "interval_95": [
+            -0.0334,
+            0.0321
+          ],
+          "claims": 809
+        }
+      },
+      "no_cutoff": {
+        "hit@3_answerable": {
+          "difference": 0.0309,
+          "interval_95": [
+            0.0049,
+            0.0556
+          ],
+          "claims": 809
+        }
+      }
+    },
+    "test": {
+      "cutoffs_matched": {
+        "hit@3_answerable": {
+          "difference": -0.0267,
+          "interval_95": [
+            -0.0667,
+            0.0133
+          ],
+          "claims": 300
+        },
+        "no_passage_unanswerable": {
+          "difference": -0.0033,
+          "interval_95": [
+            -0.05,
+            0.0467
+          ],
+          "claims": 300
+        }
+      },
+      "no_cutoff": {
+        "hit@3_answerable": {
+          "difference": 0.0067,
+          "interval_95": [
+            -0.03,
+            0.0433
+          ],
+          "claims": 300
+        }
+      }
+    }
+  },
+  "vector_path_ms_per_claim_median": 17.9,
+  "minutes": 8.2
+}

@@ -4,7 +4,7 @@ Every document of the benchmark is stored as one passage in the app's own engine
 (`src/rag_engine.py`, ChromaDB backend). The steps that read files and split them into
 chunks are not part of this test. Then every test question goes through these set-ups:
 
-  dense           vector search only (all-MiniLM-L6-v2 in ChromaDB)
+  dense           vector search only (the chosen embedding model in ChromaDB)
   bm25            keyword search only (the app's BM25)
   dense+rerank    the app's retrieve() with BM25 switched off: vector candidates, then the
                   cross-encoder puts them in order
@@ -20,7 +20,7 @@ scored with Hit@3 (no passage counts as a miss) and the share of questions with 
 and compared with the same call without the cut-off.
 
 Run from the repository root:
-    python -m evaluation.retrieval_eval --dataset scifact
+    python -m evaluation.retrieval_eval --dataset scifact --embedder bge-small-en-v1.5
 """
 
 import argparse
@@ -35,12 +35,12 @@ from pathlib import Path
 
 import pandas as pd
 from huggingface_hub import hf_hub_download
-from sentence_transformers import CrossEncoder, SentenceTransformer
+from sentence_transformers import SentenceTransformer
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
-from rag_engine import RAGEngine  # noqa: E402
+from rag_engine import EMBEDDERS, RERANKER, RAGEngine, load_reranker  # noqa: E402
 
 from evaluation.metrics import hit_at_k, mrr_at_k, ndcg_at_k, recall_at_k  # noqa: E402
 
@@ -55,8 +55,6 @@ DATASETS = {
         "qrels": ("BeIR/fiqa-qrels", "252958f2d646e22cab6d0c72dd3f0d5de6d0655a"),
     },
 }
-EMBEDDER = ("sentence-transformers/all-MiniLM-L6-v2", "1110a243fdf4706b3f48f1d95db1a4f5529b4d41")
-RERANKER = ("cross-encoder/ms-marco-MiniLM-L-6-v2", "233902d25c440f23af6f7d6e94d2946bac0bee0a")
 K = 10
 APP_TOP_K = 3
 OUT_DIR = Path(__file__).resolve().parent
@@ -82,10 +80,11 @@ def load(name: str, split: str = "test") -> tuple[pd.DataFrame, dict[str, str], 
     return corpus, questions, relevant
 
 
-def build_engine(corpus: pd.DataFrame, embedder, reranker, db_path: str, name: str) -> tuple[RAGEngine, int]:
+def build_engine(corpus: pd.DataFrame, embedder_name: str, embedder, reranker, db_path: str,
+                 name: str) -> tuple[RAGEngine, int]:
     """Store every document as one passage, with its id as the source name."""
     engine = RAGEngine(db_path=db_path, collection_name=f"beir_{name}",
-                       embedding_model=embedder, reranker=reranker)
+                       embedding_model=embedder, reranker=reranker, embedder=embedder_name)
     titles = corpus["title"].fillna("").astype(str)
     bodies = corpus["text"].fillna("").astype(str)
     texts = [(t + "\n" + b).strip() for t, b in zip(titles, bodies)]
@@ -95,7 +94,7 @@ def build_engine(corpus: pd.DataFrame, embedder, reranker, db_path: str, name: s
     step = 2000
     for start in range(0, len(texts), step):
         chunk_texts, chunk_ids = texts[start:start + step], ids[start:start + step]
-        emb = embedder.encode(chunk_texts, batch_size=64).tolist()
+        emb = engine.embed_passages(chunk_texts).tolist()
         engine.collection.add(ids=chunk_ids, documents=chunk_texts, embeddings=emb,
                               metadatas=[{"source": i} for i in chunk_ids])
         print(f"  stored {start + len(chunk_texts)}/{len(texts)}", flush=True)
@@ -109,6 +108,7 @@ def sources(metas) -> list[str]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument("--dataset", choices=sorted(DATASETS), default="scifact")
+    parser.add_argument("--embedder", choices=sorted(EMBEDDERS), default="bge-small-en-v1.5")
     parser.add_argument("--limit", type=int, default=0, help="only the first N questions (quick check)")
     args = parser.parse_args()
 
@@ -117,14 +117,15 @@ def main() -> None:
         questions = dict(list(questions.items())[:args.limit])
     print(f"{args.dataset}: {len(corpus)} documents, {len(questions)} test questions", flush=True)
 
-    embedder = SentenceTransformer(EMBEDDER[0], revision=EMBEDDER[1], device="cpu")
-    reranker = CrossEncoder(RERANKER[0], revision=RERANKER[1], device="cpu")
+    spec = EMBEDDERS[args.embedder]
+    embedder = SentenceTransformer(spec["repo"], revision=spec["revision"], device="cpu")
+    reranker = load_reranker(device="cpu")
 
     with tempfile.TemporaryDirectory() as tmp:
-        engine, n_stored = build_engine(corpus, embedder, reranker, tmp, args.dataset)
+        engine, n_stored = build_engine(corpus, args.embedder, embedder, reranker, tmp, args.dataset)
 
         def dense(q):
-            res = engine.collection.query(query_embeddings=embedder.encode([q]).tolist(), n_results=K)
+            res = engine.collection.query(query_embeddings=engine.embed_query(q).tolist(), n_results=K)
             return res["ids"][0]
 
         def bm25(q):
@@ -183,12 +184,13 @@ def main() -> None:
 
     result = {
         "dataset": args.dataset,
+        "embedder": args.embedder,
         "documents_in_corpus": len(corpus),
         "documents_stored": n_stored,
         "test_questions": len(questions),
         "full_test_set": not args.limit,
         "sources": {"corpus": DATASETS[args.dataset]["corpus"], "qrels": DATASETS[args.dataset]["qrels"],
-                    "embedder": EMBEDDER, "reranker": RERANKER},
+                    "embedder": (spec["repo"], spec["revision"]), "reranker": RERANKER},
         "machine": f"{platform.machine()}, {platform.system()} {platform.release()}, CPU only",
         "packages": {p: version(p) for p in ["chromadb", "sentence-transformers", "torch", "rank-bm25"]},
         "setups": summary,
@@ -199,10 +201,10 @@ def main() -> None:
         return
     all_results_path = OUT_DIR / "results.json"
     all_results = json.loads(all_results_path.read_text()) if all_results_path.exists() else {}
-    all_results[args.dataset] = result
+    all_results[f"{args.dataset}/{args.embedder}"] = result
     all_results_path.write_text(json.dumps(all_results, indent=2) + "\n")
-    per_q.round(5).to_csv(OUT_DIR / f"per_question_{args.dataset}.csv", index=False)
-    print(f"Saved {all_results_path} and per_question_{args.dataset}.csv")
+    per_q.round(5).to_csv(OUT_DIR / f"per_question_{args.dataset}_{args.embedder}.csv", index=False)
+    print(f"Saved {all_results_path} and per_question_{args.dataset}_{args.embedder}.csv")
 
 
 if __name__ == "__main__":

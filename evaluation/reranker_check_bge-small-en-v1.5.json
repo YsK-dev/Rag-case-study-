@@ -1,0 +1,48 @@
+{
+  "embedder": "bge-small-en-v1.5",
+  "candidates": {
+    "ms-marco-MiniLM-L-6-v2": [
+      "cross-encoder/ms-marco-MiniLM-L-6-v2",
+      "233902d25c440f23af6f7d6e94d2946bac0bee0a"
+    ],
+    "ms-marco-MiniLM-L-12-v2": [
+      "cross-encoder/ms-marco-MiniLM-L-12-v2",
+      "7b0235231ca2674cb8ca8f022859a6eba2b1c968"
+    ],
+    "bge-reranker-base": [
+      "BAAI/bge-reranker-base",
+      "2cfc18c9415c912f9d8155881c133215df768a70"
+    ]
+  },
+  "train": {
+    "ms-marco-MiniLM-L-6-v2": {
+      "hit@3": 0.759,
+      "ms_per_claim_median": 659.4
+    },
+    "ms-marco-MiniLM-L-12-v2": {
+      "hit@3": 0.7565,
+      "ms_per_claim_median": 1315.6,
+      "difference_vs_current": {
+        "difference": -0.0025,
+        "interval_95": [
+          -0.0173,
+          0.0136
+        ]
+      }
+    },
+    "bge-reranker-base": {
+      "hit@3": 0.7787,
+      "ms_per_claim_median": 2986.5,
+      "difference_vs_current": {
+        "difference": 0.0198,
+        "interval_95": [
+          -0.0012,
+          0.0408
+        ]
+      }
+    }
+  },
+  "test": {},
+  "chosen_on_train": "ms-marco-MiniLM-L-6-v2",
+  "minutes": 72.7
+}

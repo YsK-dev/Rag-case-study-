@@ -60,7 +60,7 @@ else:
 |------------|---------|
 | **ChromaDB** | Primary vector database |
 | **FAISS** | High-performance alternative |
-| **sentence-transformers** | Embedding model (all-MiniLM-L6-v2) |
+| **sentence-transformers** | Embedding model (bge-small-en-v1.5; all-MiniLM-L6-v2 before) |
 | **rank_bm25** | BM25 scoring for hybrid search |
 | **PyMuPDF, python-docx, openpyxl** | Document parsing |
 

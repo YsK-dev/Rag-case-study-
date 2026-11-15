@@ -1,5 +1,5 @@
 {
-  "scifact": {
+  "scifact/all-MiniLM-L6-v2": {
     "dataset": "scifact",
     "documents_in_corpus": 5183,
     "documents_stored": 5183,
@@ -78,6 +78,90 @@
         "hit@3": 0.7267,
         "no_passage_share": 0.0,
         "ms_per_question_median": 741.0
+      }
+    },
+    "embedder": "all-MiniLM-L6-v2"
+  },
+  "scifact/bge-small-en-v1.5": {
+    "dataset": "scifact",
+    "embedder": "bge-small-en-v1.5",
+    "documents_in_corpus": 5183,
+    "documents_stored": 5183,
+    "test_questions": 300,
+    "full_test_set": true,
+    "sources": {
+      "corpus": [
+        "BeIR/scifact",
+        "b3b5335604bf5ee3c4447671af975ea25143d4f5"
+      ],
+      "qrels": [
+        "BeIR/scifact-qrels",
+        "2938d17dc3b09882fdb8c12bbbe2e2dc0e75a029"
+      ],
+      "embedder": [
+        "BAAI/bge-small-en-v1.5",
+        "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a"
+      ],
+      "reranker": [
+        "cross-encoder/ms-marco-MiniLM-L-6-v2",
+        "233902d25c440f23af6f7d6e94d2946bac0bee0a"
+      ]
+    },
+    "machine": "arm64, Darwin 25.4.0, CPU only",
+    "packages": {
+      "chromadb": "1.5.9",
+      "sentence-transformers": "6.3.0",
+      "torch": "2.15.0",
+      "rank-bm25": "0.2.2"
+    },
+    "setups": {
+      "dense": {
+        "ndcg@10": 0.7127,
+        "recall@10": 0.8362,
+        "mrr@10": 0.6822,
+        "hit@3": 0.73,
+        "no_passage_share": 0.0,
+        "ms_per_question_median": 18.3
+      },
+      "bm25": {
+        "ndcg@10": 0.6519,
+        "recall@10": 0.774,
+        "mrr@10": 0.6186,
+        "hit@3": 0.6933,
+        "no_passage_share": 0.0,
+        "ms_per_question_median": 10.2
+      },
+      "dense+rerank": {
+        "ndcg@10": 0.7039,
+        "recall@10": 0.8352,
+        "mrr@10": 0.6692,
+        "hit@3": 0.7233,
+        "no_passage_share": 0.0,
+        "ms_per_question_median": 1051.2
+      },
+      "hybrid+rerank": {
+        "ndcg@10": 0.6965,
+        "recall@10": 0.8272,
+        "mrr@10": 0.6635,
+        "hit@3": 0.7233,
+        "no_passage_share": 0.0,
+        "ms_per_question_median": 1639.5
+      },
+      "app_default": {
+        "ndcg@10": 0.6074,
+        "recall@10": 0.6449,
+        "mrr@10": 0.6083,
+        "hit@3": 0.67,
+        "no_passage_share": 0.1233,
+        "ms_per_question_median": 552.7
+      },
+      "app_default_no_cutoff": {
+        "ndcg@10": 0.6466,
+        "recall@10": 0.6966,
+        "mrr@10": 0.6444,
+        "hit@3": 0.7233,
+        "no_passage_share": 0.0,
+        "ms_per_question_median": 580.4
       }
     }
   }
